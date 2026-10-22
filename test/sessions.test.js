@@ -72,6 +72,25 @@ test('hosted mode fails closed without HTTPS origin and team password',async()=>
   await assert.rejects(createStudio({hosted:true,publicOrigin:'http://example.com',teamPassword:'test-password-12345'}),/HTTPS/);
   await assert.rejects(createStudio({hosted:true,publicOrigin:'https://example.com',teamPassword:''}),/TEAM_PASSWORD/);
 });
+test('Render is detected without STUDIO_HOSTED and binds the public interface',async()=>{
+  const names=['RENDER','STUDIO_HOSTED','RENDER_EXTERNAL_URL','PUBLIC_ORIGIN','TEAM_PASSWORD'];
+  const previous=Object.fromEntries(names.map(name=>[name,process.env[name]]));
+  let app;
+  try{
+    process.env.RENDER='true';delete process.env.STUDIO_HOSTED;delete process.env.PUBLIC_ORIGIN;
+    process.env.RENDER_EXTERNAL_URL='https://studio.example';delete process.env.TEAM_PASSWORD;
+    await assert.rejects(createStudio({port:0}),/TEAM_PASSWORD/);
+    const root=await fs.mkdtemp(path.join(os.tmpdir(),'studio-render-start-'));
+    app=await createStudio({port:0,dataDir:root,teamPassword:'test-team-password-123456'});
+    assert.equal(app.hosted,true);assert.equal(app.server.address().address,'0.0.0.0');
+    assert.equal(app.url,'https://studio.example');
+    assert.equal((await fetch(app.localURL+'/health')).status,200);
+    assert.equal((await fetch(app.localURL+'/',{headers:{Host:'studio.example'}})).status,401);
+  }finally{
+    if(app)await app.close();
+    for(const name of names){if(previous[name]===undefined)delete process.env[name];else process.env[name]=previous[name];}
+  }
+});
 test('keys expire independently and idle sessions expire',async()=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'studio-expiry-'));
   const app=await createStudio({dataDir:root,keyTtlMs:40,sessionTtlMs:200});

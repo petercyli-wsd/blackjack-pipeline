@@ -1,21 +1,36 @@
 # Dealer Transition Studio - team web app
 
-One hosted URL for teammates on Windows, macOS and Linux. Teammates need only a browser and their own funded fal/KIE account for cloud methods. Provider keys are never included in the source or deployment. The hosting owner pays server costs; each user pays their own provider generation costs.
+One hosted URL for teammates on Windows, macOS and Linux. Teammates need only a browser and their own funded fal/KIE account for cloud methods. Provider keys are never included in the source or deployment. Hosting must use the Free plan with no paid resources. Each user still pays their own fal/KIE generation costs; the three FFmpeg methods have no provider charge.
 
-## Deploy to Render
+## Deploy to Render for free (no Blueprint required)
 
-This folder is the source root. `render.yaml` and `Dockerfile` define the deployment. It is a Node/FFmpeg web service, not a static site or standalone HTML artifact.
+This folder is the source root. The app is a Node/FFmpeg web service. Use Render's manual Web Service creation; no Blueprint setup is required. The optional `render.yaml` also explicitly specifies `plan: free`. Do not use older deployment ZIPs that selected `1c-2g`.
 
-1. Put this folder's source into a private GitHub/GitLab repository. Keep `.gitignore` and `.dockerignore`. Do not upload `node_modules`, `dist`, `data`, `output`, `.env`, user videos or keys. The `npm run package:source` ZIP contains only the intended source files.
-2. In Render, create a **Blueprint** and connect that repository. Select its `render.yaml`. Review the hosting cost before deploying. The configuration requests one `1c-2g` instance in Frankfurt, with automatic redeploy disabled so a code push does not interrupt sessions. This is a starting configuration, not a measured capacity guarantee.
-3. Deploy. Render builds the Docker image, which includes Node and Linux FFmpeg/FFprobe. No setup is needed on teammates' computers. The health endpoint is `/health`.
-4. In the Render service environment settings, retrieve the generated `TEAM_PASSWORD`. Share it privately with your team along with the service's HTTPS URL. The browser login username is **team**. This is a shared access gate, separate from everyone's provider keys. Do not put provider keys in Render environment variables.
-5. Open the URL. Each teammate enters their own fal/KIE keys in **Provider credentials** and clicks **Use keys for this session**. They can now upload clips, generate, compare and download.
-6. Test a short free **Linear frame blend** first, then a cloud method with that person's credentials. Verify both joins in the downloaded full output. The Linux Docker image and all automated tests passed locally. A real Render deployment, browser appearance and paid cloud generation still need live verification.
+1. Put this folder's source into a private GitHub/GitLab repository. Keep `.gitignore` and `.dockerignore`. Do not upload `node_modules`, `dist`, `data`, `output`, `.env`, videos or keys. The latest `npm run package:source` ZIP contains only the intended source files.
+2. In Render select **New -> Web Service**, connect the repository, and select **Docker** as the language/runtime. If the repository contains this project inside a subfolder, set that folder as Root Directory. Use the included `Dockerfile`; leave Docker Command empty.
+3. Select **Free** as the instance type. Use the default `onrender.com` address. Do not add a paid database, disk, worker, workspace upgrade or compute upgrade. To avoid usage-overage billing, use a workspace with no payment method; Render documents suspension/build disabling instead of charging overages in that case. If the account requires a card or any payment, stop the deployment rather than accepting it. For an existing billed workspace, `plan: free` alone is not a guarantee of zero total charges.
+4. Add these environment variables in the service settings:
 
-The server reads Render's `RENDER_EXTERNAL_URL`. For a custom domain, set `PUBLIC_ORIGIN` to its exact HTTPS origin (for example `https://studio.example.com`); use only that canonical URL. TLS must terminate at a trusted reverse proxy. Hosted mode refuses to start without an HTTPS origin and a team password of at least 16 characters.
+   | Variable | Value |
+   | --- | --- |
+   | `STUDIO_HOSTED` | `true` |
+   | `TEAM_PASSWORD` | A new random password of at least 16 characters, shared privately with teammates |
+   | `MAX_CONCURRENT_JOBS` | `1` |
+   | `MAX_SESSIONS` | `10` |
 
-Official references: [Docker deployment](https://render.com/docs/docker), [Blueprint fields and compute plans](https://render.com/docs/blueprint-spec), [default environment variables](https://render.com/docs/environment-variables).
+   Do not add fal/KIE keys here. Set Health Check Path to `/health`, and disable automatic deploys so code pushes do not interrupt sessions. The Dockerfile already supplies the port and FFmpeg paths.
+5. Create the Free web service. Render builds the Linux image. Open its HTTPS URL; the browser login username is **team**, with the password you set above. Share this URL/password privately. Teammates enter their own provider keys inside the app.
+6. Test a short **Linear frame blend** first, then a cloud method using the tester's own credits. Review both joins in the full download. The Linux image passed tests at 1 CPU / 2 GB; this does not establish performance on Render Free. The smaller free instance may be slow or run out of memory for large clips. No paid upgrade is authorized as a fallback.
+
+### Free-tier behavior
+
+Render sleeps free services after 15 idle minutes and may take about a minute to wake them. Sleep, restart and redeploy clear the app's sessions and temporary files. Download results promptly. Keep the page open while processing so normal job-status polling continues; this is not a keep-alive service after work finishes.
+
+The workspace has monthly free-hour, outbound-bandwidth and build limits. Video downloads consume bandwidth, and unusual outbound API/file traffic can also cause suspension. This is a limited trial/team-preview hosting option, not guaranteed unlimited video processing. No persistent disk or database is needed.
+
+The server reads Render's `RENDER_EXTERNAL_URL`. For another host, set `PUBLIC_ORIGIN` to its exact HTTPS origin. Hosted mode refuses to start without an HTTPS origin and a team password of at least 16 characters. The hosting operator controls the server and can access server memory; keys are isolated between app users, not hidden from the operator.
+
+Official references: [Free service setup, limits and overage behavior](https://render.com/docs/free), [Docker deployment](https://render.com/docs/docker), [optional Blueprint configuration](https://render.com/docs/blueprint-spec).
 
 ## Teammate workflow
 
@@ -39,7 +54,7 @@ The full transition output is retained A -> generated bridge -> retained B. The 
 - A render times out after one hour. Uploads time out after ten minutes. Cancellation/timeout stops local processing and provider polling; already submitted cloud work may complete and be billed.
 - Refreshing during generation offers **Resume render**. **Open latest completed result** restores only your current session's last completed result. Other users' and earlier desktop results are inaccessible.
 - Run exactly one Node process on one hosting instance. In-memory sessions do not support horizontal scaling. For larger deployment, use a job queue and shared session/object storage before scaling.
-- No persistent disk is required: results are intentionally temporary. Hosting billing and provider billing are separate.
+- No persistent disk is required: results are intentionally temporary. Free hosting does not make fal/KIE generations free; each person uses their own provider credits.
 
 ## Local development
 

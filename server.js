@@ -33,7 +33,7 @@ async function sendFile(req,res,file,download=false){
   await pipeline(createReadStream(file,{start,end}),res).catch(()=>{});
 }
 async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'data'),port=Number(process.env.PORT)||0,
-  hosted=process.env.STUDIO_HOSTED==='true',publicOrigin=process.env.PUBLIC_ORIGIN||process.env.RENDER_EXTERNAL_URL,
+  hosted=process.env.STUDIO_HOSTED==='true'||process.env.RENDER==='true',publicOrigin=process.env.PUBLIC_ORIGIN||process.env.RENDER_EXTERNAL_URL,
   teamPassword=process.env.TEAM_PASSWORD||'',sessionTtlMs=2*60*60*1000,keyTtlMs=8*60*60*1000,
   maxConcurrentJobs=Number(process.env.MAX_CONCURRENT_JOBS)||1,maxSessions=Number(process.env.MAX_SESSIONS)||10,
   maxUploadBytes=512*1024*1024,jobTimeoutMs=60*60*1000,renderVideo=processVideos}={}){
@@ -169,12 +169,13 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
   const localURL=`http://127.0.0.1:${server.address().port}`;if(!origin)origin=localURL;
   let closePromise;
   function close(){return closePromise||=(async()=>{closing=true;clearInterval(cleanup);await Promise.allSettled([...sessions.values()].map(endSession));server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await removeOwned(instance,namespace);})();}
-  return {url:origin,localURL,close,server,sweep};
+  return {url:origin,localURL,hosted,close,server,sweep};
 }
 module.exports={createStudio};
 if(require.main===module)createStudio().then(studio=>{
   console.log(`Dealer Transition Studio Web: ${studio.url}`);console.log('Each browser session uses its own keys and temporary files. Keys are never saved.');
-  if(process.argv.includes('--open')&&process.env.STUDIO_HOSTED!=='true'){
+  console.log(`Listening on ${studio.server.address().address}:${studio.server.address().port} (${studio.hosted?'hosted':'local'} mode)`);
+  if(process.argv.includes('--open')&&!studio.hosted){
     if(process.platform==='win32')spawn('rundll32.exe',['url.dll,FileProtocolHandler',studio.url],{windowsHide:true,stdio:'ignore'}).on('error',()=>{});
     else spawn(process.platform==='darwin'?'open':'xdg-open',[studio.url],{stdio:'ignore'}).on('error',()=>{});
   }
