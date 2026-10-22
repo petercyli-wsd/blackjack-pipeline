@@ -1,70 +1,127 @@
-const $=id=>document.getElementById(id);
-let methods=[],clips={},result=null,busy=false;
+﻿const $=id=>document.getElementById(id);
+let methods=[],clips={},result=null,busy=false,importing=false,keyReady={fal:false,kie:false};
 let reviewMode='preview';
-function showResult(){
-  if(!result)return;
-  const plain=$('comparison').value==='no-bridge';
-  const full=reviewMode==='full';
-  $('result').pause();
-  $('result').src=plain?(full?result.noBridgeUrl:result.noBridgePreview):(full?result.url:result.preview);
-  const label=plain?'No bridge · direct cut':'With transition';
-  const duration=plain?result.noBridgeDuration:result.duration;
-  $('result-info').textContent=`${label} · ${duration.toFixed(2)} seconds total · ${result.width} × ${result.height} · Showing ${full?'full video':'join preview'}. Switching versions restarts playback.`;
-  $('export').textContent=plain?'Export no-bridge MP4':'Export transition MP4';
-  $('preview').setAttribute('aria-pressed',String(!full));$('full').setAttribute('aria-pressed',String(full));
-}
+const selectedMethod=()=>methods.find(m=>m.id===$('method').value);
+const hasPendingKeys=()=>!!($('fal-key').value.trim()||$('kie-key').value.trim());
 const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);};
 const fail=e=>status(e.message.replace(/^Error invoking remote method '[^']+': Error: /,''),true);
-function readiness() {$('generate').disabled=busy||!clips.a||!clips.b;}
-function methodChange() {
-  const m=methods.find(m=>m.id===$('method').value);if(!m)return;
-  $('method-help').textContent=m.help;$('duration').min=m.min;$('duration').max=m.max;$('duration').step=m.provider==='local'||m.id==='film'?'0.1':'1';$('duration').value=m.defaultDuration;
-  $('prompt-wrap').hidden=m.provider==='local'||m.id==='film';
-  $('timing').textContent=m.id==='dissolve'?'A and B overlap by the transition duration.':'Inserts the full bridge between the selected boundaries. Duration is added to the timeline; cloud videos are not compressed into a subsecond join.';
+function readiness(){
+  const m=selectedMethod(),locked=busy||importing;
+  const hasKey=m&&(m.provider==='local'||keyReady[m.provider]||$(`${m.provider}-key`).value.trim());
+  $('generate').disabled=!!locked||!clips.a||!clips.b||!hasKey;
+  $('save-keys').disabled=!!locked||!hasPendingKeys();
+  $('forget-keys').disabled=!!locked||(!keyReady.fal&&!keyReady.kie&&!hasPendingKeys());
+  for(const slot of ['a','b']){
+    $(`pick-${slot}`).disabled=!!locked;
+    $(slot==='a'?'a-end':'b-start').disabled=!!locked||!clips[slot];
+    $(`use-${slot}`).disabled=!!locked||!clips[slot];
+  }
+  $('generate-hint').textContent=busy?'Processing. You can cancel below.':importing?'Uploading your clip...':!m?'Loading methods...':!clips.a||!clips.b?'Choose both clips to continue.':!hasKey?`Add your ${m.provider==='fal'?'fal':'KIE'} key in Provider credentials above.`:'Ready. Your output includes clip A, the transition and clip B.';
+  if(m){
+    $('provider-note').textContent=m.provider==='local'?'Runs on this server. No provider credits.':`${m.provider==='fal'?'fal':'KIE'} ${keyReady[m.provider]?'key ready':hasKey?'key entered':'key needed'} - uses your provider credits`;
+    $('provider-note').classList.toggle('needs-key',!hasKey);
+  }
+}
+function methodChange(){
+  const m=selectedMethod();if(!m)return;
+  const frames=m.kind==='interpolation';
+  $('method-help').textContent=m.help;
+  $('duration').min=m.min;$('duration').max=m.max;$('duration').step=m.provider==='local'||frames?'0.1':'1';$('duration').value=m.defaultDuration;
+  $('prompt-wrap').hidden=m.provider==='local'||frames;
+  $('timing').textContent=m.id==='dissolve'?'Overlaps A and B by this duration, shortening the full video.':`Inserts a ${frames?'frame-interpolated':'generated'} bridge between A and B. Its duration is added to the full video.`;
+  readiness();
 }
 function keyStatus(k){
-  const label=p=>k[p]?(k.saved?.[p]?'saved':'ready for session'):'not set';
-  $('key-status').textContent=` · fal ${label('fal')} / KIE ${label('kie')}`;
-
-  if(k.warning)status(k.warning,true);
+  keyReady={fal:!!k.fal,kie:!!k.kie};
+  $('key-status').textContent=`fal: ${k.fal?'ready for this session':'not set'}  |  KIE: ${k.kie?'ready for this session':'not set'}`;
+  if(k.warning)status(k.warning,true);readiness();
 }
-for(const slot of ['a','b']) {
-  $(`pick-${slot}`).onclick=async()=>{$(`pick-${slot}`).disabled=true;try{const c=await window.studio.pick();if(!c)return;clips[slot]=c;$(`video-${slot}`).src=c.url;$(`meta-${slot}`).textContent=`${c.name} · ${c.width} × ${c.height} · ${c.duration.toFixed(2)} s · ${c.fps.toFixed(2)} fps${c.audio?'':' · no audio'}`;const cut=$(slot==='a'?'a-end':'b-start');cut.disabled=false;cut.max=c.duration;cut.value=slot==='a'?c.duration:0;$(`use-${slot}`).disabled=false;readiness();}catch(e){fail(e);}finally{$(`pick-${slot}`).disabled=busy;}};
+for(const provider of ['fal','kie']){
+  $(`${provider}-key`).addEventListener('input',readiness);
+  $(`${provider}-key`).addEventListener('keydown',e=>{if(e.key==='Enter'&&!$('save-keys').disabled){e.preventDefault();$('save-keys').click();}});
+}
+async function applyKeys(){
+  const keys=await window.studio.setKeys({fal:$('fal-key').value,kie:$('kie-key').value});
+  $('fal-key').value='';$('kie-key').value='';keyStatus(keys);
+}
+$('save-keys').onclick=async()=>{
+  $('save-keys').disabled=true;
+  try{await applyKeys();$('key-feedback').textContent='Keys applied to your session.';}catch(e){$('key-feedback').textContent=e.message;fail(e);}finally{readiness();}
+};
+$('forget-keys').onclick=async()=>{
+  $('forget-keys').disabled=true;
+  try{const keys=await window.studio.forgetKeys();$('fal-key').value='';$('kie-key').value='';keyStatus(keys);$('key-feedback').textContent='Session keys cleared.';}catch(e){$('key-feedback').textContent=e.message;fail(e);}finally{readiness();}
+};
+for(const slot of ['a','b']){
+  $(`pick-${slot}`).onclick=async()=>{
+    if(busy||importing)return;importing=true;readiness();
+    try{
+      const c=await window.studio.pick();if(!c)return;clips[slot]=c;
+      $(`video-${slot}`).src=c.url;
+      $(`meta-${slot}`).textContent=`${c.name} | ${c.width} x ${c.height} | ${c.duration.toFixed(2)} s | ${c.fps.toFixed(2)} fps${c.audio?'':' | no audio'}`;
+      const cut=$(slot==='a'?'a-end':'b-start');cut.max=c.duration;cut.value=slot==='a'?c.duration:0;
+      status(clips.a&&clips.b?'Both clips ready. Choose a method and create your transition.':`Clip ${slot.toUpperCase()} ready. Choose the other clip to continue.`);
+    }catch(e){fail(e);}finally{importing=false;readiness();}
+  };
   $(`use-${slot}`).onclick=()=>{$(slot==='a'?'a-end':'b-start').value=$(`video-${slot}`).currentTime.toFixed(3);};
 }
-$('method').onchange=methodChange;
-async function applyKeys(){
-  const remember=false;
-  keyStatus(await window.studio.setKeys({fal:$('fal-key').value,kie:$('kie-key').value,remember}));
-  $('fal-key').value='';$('kie-key').value='';return remember;
+function setBusy(value){
+  busy=value;
+  document.querySelectorAll('.settings input,.settings select,.settings textarea,.settings button,.credentials input').forEach(e=>e.disabled=value);
+  $('latest-result').disabled=value;$('cancel').disabled=false;$('cancel').hidden=!value;
+  $('generate').textContent=value?'Creating transition...':'Create transition';readiness();
 }
-$('save-keys').onclick=async()=>{try{const saved=await applyKeys();status(saved?'API keys saved on this device. They will load automatically next time.':'Keys are ready for this session. Use Clear keys or End my session to clear them.');}catch(e){fail(e);}};
-$('forget-keys').onclick=async()=>{try{keyStatus(await window.studio.forgetKeys());$('fal-key').value='';$('kie-key').value='';status('Session keys cleared.');}catch(e){fail(e);}};
-function setBusy(value) {busy=value;document.querySelectorAll('.settings input,.settings select,.settings textarea,.settings button,.sources button,.sources input,.credentials input,.credentials button').forEach(e=>e.disabled=value);$('latest-result').disabled=value;$('cancel').disabled=false;$('cancel').hidden=!value;readiness();}
+function showResult(){
+  if(!result)return;
+  const plain=$('comparison').value==='no-bridge',full=reviewMode==='full';
+  $('result').pause();$('result').src=plain?(full?result.noBridgeUrl:result.noBridgePreview):(full?result.url:result.preview);
+  const label=plain?'No bridge - direct cut':'With transition',duration=plain?result.noBridgeDuration:result.duration;
+  $('result-info').textContent=`${label} | ${duration.toFixed(2)} seconds total | ${result.width} x ${result.height} | ${full?'Full video':'Join preview'}. Switching versions restarts playback.`;
+  $('export').textContent=plain?'Export direct cut':'Export transition';
+  $('preview').setAttribute('aria-pressed',String(!full));$('full').setAttribute('aria-pressed',String(full));
+}
 function receiveResult(r){
-  result=r;reviewMode='preview';$('comparison').value='transition';$('empty').hidden=true;$('anchors').hidden=false;$('anchor-a').src=r.frames[0];$('anchor-b').src=r.frames[1];
+  result=r;reviewMode='preview';$('comparison').value='transition';$('empty').hidden=true;$('result').hidden=false;$('anchors').hidden=false;$('anchor-a').src=r.frames[0];$('anchor-b').src=r.frames[1];
   for(const id of ['preview','full','export','reveal','comparison'])$(id).disabled=false;
   showResult();$('result-status').textContent='READY TO REVIEW';
 }
+$('method').onchange=methodChange;
 $('latest-result').onclick=async()=>{
-  setBusy(true);status('Opening latest completed result and preparing comparison…');
+  setBusy(true);status('Opening your latest result and preparing its comparison...');
   try{receiveResult(await window.studio.latestResult());status('Previous result loaded. No new AI generation was requested.');}catch(e){fail(e);}finally{setBusy(false);}
 };
 $('generate').onclick=async()=>{
-  if(!clips.a||!clips.b)return;
-  setBusy(true);$('log').textContent='';status('Starting…');$('result-status').textContent='PROCESSING';
-  try {
+  if(!clips.a||!clips.b||busy||importing)return;
+  setBusy(true);$('log').textContent='';status('Starting...');$('result-status').textContent='PROCESSING';
+  try{
     await applyKeys();
     const r=await window.studio.process({a:clips.a.id,b:clips.b.id,method:$('method').value,duration:Number($('duration').value),aEnd:Number($('a-end').value),bStart:Number($('b-start').value),fps:Number($('fps').value),prompt:$('prompt').value,mute:$('mute').checked});
-    receiveResult(r);
-    $('result-status').textContent='READY TO REVIEW';status('Complete. Review both joins before exporting.');
-  }catch(e){fail(e);$('result-status').textContent=result?'PREVIOUS RESULT':'JOB STOPPED';}
-  finally{setBusy(false);}
+    receiveResult(r);status('Complete. Review both joins before exporting.');
+  }catch(e){fail(e);$('result-status').textContent=result?'PREVIOUS RESULT':'JOB STOPPED';}finally{setBusy(false);}
 };
-$('cancel').onclick=()=>{window.studio.cancel().catch(fail);$('cancel').disabled=true;status('Cancelling local work… Cloud charges may still apply.');};
+$('cancel').onclick=()=>{window.studio.cancel().catch(fail);$('cancel').disabled=true;status('Cancelling server processing... Cloud charges may still apply.');};
 $('comparison').onchange=showResult;
 $('preview').onclick=()=>{reviewMode='preview';showResult();};$('full').onclick=()=>{reviewMode='full';showResult();};
-$('export').onclick=async()=>{try{const p=await window.studio.export(result.id,$('comparison').value);if(p)status(`Download started in ${p}`);}catch(e){fail(e);}};
+$('export').onclick=async()=>{try{const destination=await window.studio.export(result.id,$('comparison').value);if(destination)status(`Download started in ${destination}`);}catch(e){fail(e);}};
 $('reveal').onclick=()=>window.studio.reveal(result.id);
 window.studio.onProgress(message=>{status(message);const log=$('log');log.textContent+=`${new Date().toLocaleTimeString()}  ${message}\n`;log.scrollTop=log.scrollHeight;});
-window.studio.init().then(data=>{if(data.activeJob){status('Your previous render is still running. Use Resume render to reconnect.');const resume=document.createElement('button');resume.textContent='Resume render';resume.onclick=async()=>{resume.disabled=true;setBusy(true);try{receiveResult(await window.studio.resume(data.activeJob));status('Result restored.');}catch(e){fail(e);}finally{setBusy(false);resume.remove();}};$('latest-result').after(resume);}methods=data.methods;for(const m of methods){const op=document.createElement('option');op.value=m.id;op.textContent=m.name;$('method').append(op);}$('prompt').value=data.prompt;keyStatus(data.keys);methodChange();}).catch(fail);
+window.studio.init().then(data=>{
+  methods=data.methods;
+  for(const [label,filter] of [
+    ['Frame interpolation',m=>m.kind==='interpolation'],
+    ['Generative bridges',m=>m.provider!=='local'&&m.kind!=='interpolation'],
+    ['No provider credits',m=>m.provider==='local']
+  ]){
+    const group=document.createElement('optgroup');group.label=label;
+    for(const m of methods.filter(filter)){const option=document.createElement('option');option.value=m.id;option.textContent=m.name;group.append(option);}
+    $('method').append(group);
+  }
+  $('prompt').value=data.prompt;keyStatus(data.keys);methodChange();
+  if(data.activeJob){
+    status('Your previous render is still running. Use Resume render to reconnect.');
+    const resume=document.createElement('button');resume.textContent='Resume render';
+    resume.onclick=async()=>{resume.disabled=true;setBusy(true);try{receiveResult(await window.studio.resume(data.activeJob));status('Result restored.');}catch(e){fail(e);}finally{setBusy(false);resume.remove();}};
+    $('history-actions').append(resume);
+  }
+}).catch(fail);
+readiness();

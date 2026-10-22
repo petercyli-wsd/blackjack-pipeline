@@ -16,7 +16,7 @@ test('web upload, job, comparison, downloads, restore, cancellation and credenti
     const api=async(route,method='GET',data)=>{const r=await fetch(app.url+route,{method,headers,body:data?JSON.stringify(data):undefined});const value=await r.json();assert.ok(r.ok,JSON.stringify(value));return value;};
     assert.equal((await fetch(app.url+'/api/init')).status,403);
     assert.equal((await fetch(app.url+'/api/init',{headers:{...headers,Origin:'https://untrusted.example'}})).status,403);
-    assert.equal((await api('/api/init')).methods.length,7);
+    const methods=(await api('/api/init')).methods;assert.equal(methods.length,8);assert.ok(methods.some(m=>m.id==='rife'&&m.provider==='fal'));
     const configured=await api('/api/keys','POST',{fal:'fake-key-do-not-save'});assert.equal(configured.fal,true);assert.ok(!JSON.stringify(configured).includes('fake-key'));
     await api('/api/keys','DELETE');assert.equal((await api('/api/init')).keys.fal,false);
     const upload=await fetch(app.url+'/api/upload?name=sample.mp4',{method:'POST',headers:{Cookie,'X-Studio-Token':token},body:await fs.readFile(clip)});assert.equal(upload.status,200);const item=await upload.json();

@@ -33,3 +33,19 @@ test('cancelled generation does not upload or submit',async t=>{
   const c=new AbortController();c.abort();
   await assert.rejects(()=>generate(getMethod('kling-kie'),[],{},'key',c.signal,()=>{},()=>{}));assert.equal(mock.mock.callCount(),0);
 });
+test('RIFE uploads only boundaries, uses the session key and retrieves the queued video',async()=>{
+  const calls=[],records=[];
+  const factory=options=>{
+    assert.equal(options.credentials,'rife-session-key');
+    return {storage:{upload:async blob=>{assert.equal(blob.type,'image/png');const url=`https://example.com/${calls.length}.png`;calls.push(['upload',url]);return url;}},queue:{
+      submit:async(endpoint,payload)=>{calls.push(['submit',endpoint,payload]);return {request_id:'rife-job'};},
+      status:async(endpoint,options)=>{assert.equal(endpoint,'fal-ai/rife');assert.equal(options.requestId,'rife-job');return {status:'COMPLETED'};},
+      result:async()=>({data:{video:{url:'https://example.com/rife.mp4'}}})
+    }};
+  };
+  const url=await generate(getMethod('rife'),[__filename,__filename],{duration:0.4,fps:30},'rife-session-key',new AbortController().signal,()=>{},async r=>records.push(r),{falClientFactory:factory});
+  assert.equal(url,'https://example.com/rife.mp4');assert.equal(calls.length,3);
+  assert.equal(calls[2][1],'fal-ai/rife');assert.equal(calls[2][2].input.num_frames,10);
+  assert.equal(calls[2][2].input.output_type,'video');assert.equal(calls[2][2].input.include_end,true);
+  assert.deepEqual(records,[{provider:'fal',endpoint:'fal-ai/rife',requestId:'rife-job'}]);
+});

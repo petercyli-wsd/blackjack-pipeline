@@ -37,11 +37,19 @@ Official references: [Free service setup, limits and overage behavior](https://r
 1. Open the shared URL and sign in with the team's access password.
 2. Paste **your own** fal or KIE key. Only configure the provider you use. Keys stay in your browser session's server memory, never in disk storage or localStorage. Other users cannot use or retrieve your keys through the app. The hosting operator controls the server, so this is not end-to-end encryption from the operator.
 3. Upload A and B. Set A's end and B's start, then choose a method, duration, frame rate, motion instructions and audio setting.
-4. Create the transition. FILM, Kling and Seedance send the two boundary images to your provider. Full clips pass through the app server for FFmpeg assembly. The three methods labelled local run FFmpeg on the hosting server without provider credits.
+4. Create the transition. FILM, RIFE, Kling and Seedance send the two boundary images to your provider. Full clips pass through the app server for FFmpeg assembly. The three methods labelled local run FFmpeg on the hosting server without provider credits.
 5. Compare **With transition** and **No bridge - direct cut**, using either short join previews or full video. Download either output, previews or boundary images.
 6. Download results before **End my session**. This clears your keys, cancels your work and removes your temporary files. It does not stop the shared server or affect colleagues. **Clear keys** clears keys but does not cancel an already-running request.
 
 The full transition output is retained A -> generated bridge -> retained B. The direct-cut comparison is retained A -> retained B. Dissolve instead overlaps the retained clips. Source audio surrounds silent inserted bridges; dissolve crossfades audio. Endpoint matching does not guarantee matching motion velocity or an invisible join.
+
+## RIFE and method selection
+
+The method dropdown groups frame interpolation (FILM and RIFE), generative bridges, and methods that need no provider credits. **RIFE uses your fal key** via `fal-ai/rife`, takes the two boundary images and requests a video including both endpoints. It supports 0.1-2 second bridges in this app and needs no text prompt. The result still goes between retained A and retained B, with the direct-cut comparison available as before.
+
+The integration follows the [fal RIFE API schema](https://fal.ai/models/fal-ai/rife/api). No documented RIFE endpoint was found in KIE's public catalogue when this integration was added, so there is no KIE RIFE option. KIE's existing Kling method remains available. Tests mock RIFE requests; no paid RIFE generation was performed.
+
+Credentials stay visible at the top with compact buttons. Longer privacy/limit details are expandable. The selected method shows which key it needs; Create transition becomes available once both clips and the relevant key are present (including a key pasted but not yet applied).
 
 ## Sessions and limits
 
@@ -77,6 +85,6 @@ npm run smoke
 npm run package:source
 ```
 
-Validated on Windows and inside the Linux Docker image with a 1 CPU / 2 GB limit: 12 automated tests and all three local-method smoke tests. Tests cover real local FFmpeg output, uploads, comparison downloads and seeking, restored results, separate users, credential selection with a mocked cloud renderer, ownership checks, cancellation, cleanup, expiry and hosted access checks. Provider adapters have payload/error tests. No real API keys or paid generations are used by the tests.
+The original pipeline passed 12 tests and all three local-method smoke tests inside the Linux image with a 1 CPU / 2 GB limit. The current Windows suite passes 15 tests, including Render startup and RIFE validation/adapter coverage. The latest UI changes have not been visually verified because browser automation was unavailable. Tests cover real local FFmpeg output, uploads, comparison downloads and seeking, restored results, separate users, credential selection with a mocked cloud renderer, ownership checks, cancellation, cleanup, expiry and hosted access checks. Provider adapters have payload/error tests. No real API keys or paid generations are used by the tests.
 
 Docker can be built with `docker build -t dealer-transition-team .`. Source packaging runs on Windows with PowerShell or on Unix with the `zip` utility. The source ZIP excludes runtime data, environment files, credentials, dependencies and Windows executables.

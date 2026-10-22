@@ -20,11 +20,11 @@ async function json(url,key,body,signal) {
   if(data.code!==undefined && Number(data.code)!==200) throw new Error(`Provider rejected request (${data.code}): ${data.msg||'Unknown error'}`);
   return data;
 }
-async function generate(m,frames,o,key,signal,log,record) {
+async function generate(m,frames,o,key,signal,log,record,{falClientFactory=createFalClient}={}) {
   signal.throwIfAborted();
   if(!key) throw new Error(`Enter your ${m.provider==='fal'?'fal':'KIE'} API key first.`);
   if(m.provider==='fal') {
-    const fal=createFalClient({credentials:key});
+    const fal=falClientFactory({credentials:key});
     log('Uploading boundary frames to fal…');
     const urls=[];
     for(const file of frames) { signal.throwIfAborted(); urls.push(await falStep('fal boundary upload',key,async()=>fal.storage.upload(new Blob([await fs.readFile(file)],{type:'image/png'})))); }
