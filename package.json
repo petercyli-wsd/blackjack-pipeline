@@ -1,0 +1,22 @@
+{
+  "name": "video-interpolation-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Team browser app with isolated sessions and bring-your-own provider keys",
+  "scripts": {
+    "start": "node server.js --open",
+    "serve": "node server.js",
+    "test": "node --test test/*.test.js",
+    "smoke": "node test/smoke.js",
+    "package": "node scripts/package.js",
+    "package:source": "node scripts/package-source.js"
+  },
+  "dependencies": {
+    "@fal-ai/client": "latest",
+    "ffmpeg-static": "latest",
+    "ffprobe-static": "latest"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
