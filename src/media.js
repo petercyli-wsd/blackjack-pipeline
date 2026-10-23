@@ -81,7 +81,7 @@ async function createComparison(a,b,dir,signal,log=()=>{}) {
   const info=await probe(noBridge,signal);
   return {noBridge,noBridgePreview,noBridgeDuration:info.duration};
 }
-async function processVideos(o,{dir,key,signal,log=()=>{},generator=generate}) {
+async function processVideos(o,{dir,key,signal,log=()=>{},generator=generate,onProviderJob=()=>{},outputOnly=false}) {
   const m=validateOptions(o);
   const [aInfo,bInfo]=await Promise.all([probe(o.a,signal),probe(o.b,signal)]);
   if(o.aEnd>aInfo.duration+0.05||o.bStart>=bInfo.duration-1/o.fps) throw new Error('Cut points must lie inside the clips.');
@@ -101,7 +101,7 @@ async function processVideos(o,{dir,key,signal,log=()=>{},generator=generate}) {
   await extractBoundary(a,frames[0],true,signal);
   await extractBoundary(b,frames[1],false,signal);
   const manifest={method:m.id,duration:o.duration,fps:o.fps,aEnd:o.aEnd,bStart:o.bStart,prompt:o.prompt,createdAt:new Date().toISOString()};
-  const saveManifest=async job=>{Object.assign(manifest,{job}); await fs.writeFile(path.join(dir,'job.json'),JSON.stringify(manifest,null,2));};
+  const saveManifest=async job=>{Object.assign(manifest,{job});if(job)onProviderJob(job);await fs.writeFile(path.join(dir,'job.json'),JSON.stringify(manifest,null,2));};
   await saveManifest(null);
   let joinStart=ai.duration;
   if(m.id==='dissolve') {
@@ -118,6 +118,7 @@ async function processVideos(o,{dir,key,signal,log=()=>{},generator=generate}) {
     log('Joining A → bridge → B (silent bridge, source audio retained)…');
     await ff(['-i',a,'-i',bridge,'-i',b,'-filter_complex',`[0:a]afade=t=out:st=${Math.max(0,ai.duration-0.08)}:d=0.08[a0];[2:a]afade=t=in:d=0.08[a2];[0:v][a0][1:v][1:a][2:v][a2]concat=n=3:v=1:a=1[v][au]`,'-map','[v]','-map','[au]',...encoding,output],signal);
   }
+  if(outputOnly){const info=await probe(output,signal);return {output,frames,joinStart,duration:info.duration,width:w,height:h};}
   log('Rendering a short preview around the join…');
   const preview=path.join(dir,'preview.mp4');
   const previewStart=Math.max(0,joinStart-1.5);

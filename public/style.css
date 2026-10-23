@@ -91,6 +91,14 @@ dialog{background:#18212e;color:#e8edf6;border:1px solid #527d72;border-radius:1
 dialog::backdrop{background:#000a}
 dialog a{display:block;color:var(--mint);margin:15px 0}
 [hidden]{display:none!important}
+.mode-tabs{margin:22px 0 0}.batch-mode #single-inputs,.batch-mode .review,.batch-mode .generate-actions,.batch-mode #generate-hint{display:none}
+.batch-panel details{margin-top:20px}.batch-panel input[type=file]{height:auto;min-height:44px;padding:8px;font-size:12px}
+.batch-panel input::file-selector-button{border:0;border-radius:4px;padding:7px;margin-right:8px;background:#344b64;color:#ecf4ff;cursor:pointer}
+.batch-panel .actions{gap:8px;margin-top:12px}.batch-metrics{white-space:pre-line;margin:22px 0 12px;color:var(--mint);line-height:1.8;font-size:13px}
+#batch-status{padding:12px;background:#1d2e31;border-radius:7px;line-height:1.7;overflow-wrap:anywhere}#batch-status.error{background:#362a2d;color:#ffb6ae}
+#batch-progress{width:100%;height:12px;accent-color:var(--mint)}.batch-table-wrap{max-height:420px;overflow:auto;margin-top:18px}
+.batch-panel table{border-collapse:collapse;width:100%;font-size:12px;text-align:left}.batch-panel th{position:sticky;top:0;background:#25354a}
+.batch-panel td,.batch-panel th{padding:10px;border-bottom:1px solid #344459;vertical-align:top;overflow-wrap:anywhere}.batch-panel td:nth-child(2){max-width:260px}
 @media(max-width:1100px){.workspace{grid-template-columns:330px minmax(0,1fr)}.credentials{grid-template-columns:1fr}.review-toolbar{grid-template-columns:1fr}#history-actions{justify-content:flex-start}.header-actions .badge{display:none}}
 @media(max-width:850px){.workspace{grid-template-columns:1fr}.review-toolbar{grid-template-columns:minmax(0,1fr) auto}header{flex-wrap:wrap}.header-actions{margin-left:0}.source-meta{min-height:58px}}
 @media(max-width:600px){header{padding:20px;gap:12px}h1{font-size:20px}.brand{font-size:30px}main{padding:16px}.card{padding:18px}.sources,.credential-inputs{grid-template-columns:1fr}.credential-actions{gap:8px}.credentials{gap:20px}.review-toolbar{grid-template-columns:1fr}.review-actions{align-items:flex-start}.export-actions{margin-left:0!important;justify-content:flex-start}.source-meta{min-height:0}.section-label{gap:10px}.section-label h2{font-size:16px}}

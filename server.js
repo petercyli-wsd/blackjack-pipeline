@@ -66,19 +66,27 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
   }
   function credentials(s){if(Date.now()-s.keySetAt>keyTtlMs)s.keys={fal:'',kie:''};return {fal:!!s.keys.fal,kie:!!s.keys.kie};}
   function mediaURL(s,file){const id=randomUUID();s.media.set(id,file);return `/media/${id}`;}
-  function register(s,r){return {id:randomUUID(),url:mediaURL(s,r.output),preview:mediaURL(s,r.preview),noBridgeUrl:mediaURL(s,r.noBridge),noBridgePreview:mediaURL(s,r.noBridgePreview),frames:r.frames.map(f=>mediaURL(s,f)),duration:r.duration,noBridgeDuration:r.noBridgeDuration,width:r.width,height:r.height};}
+  function register(s,r){return {id:randomUUID(),url:mediaURL(s,r.output),preview:r.preview?mediaURL(s,r.preview):null,noBridgeUrl:r.noBridge?mediaURL(s,r.noBridge):null,noBridgePreview:r.noBridgePreview?mediaURL(s,r.noBridgePreview):null,frames:r.frames.map(f=>mediaURL(s,f)),duration:r.duration,noBridgeDuration:r.noBridgeDuration,width:r.width,height:r.height};}
   function startJob(s,work){
     if(s.active)throw new Error('Your session already has a running job. Wait or cancel it first.');
-    if(runningJobs>=maxConcurrentJobs)throw new Error('The team server is rendering another job. Try again when it finishes.');
+    if(runningJobs>=maxConcurrentJobs)throw Object.assign(new Error('The team server is rendering another job. Waiting for a slot.'),{status:429});
     const job={id:randomUUID(),state:'running',messages:[],offset:0,controller:new AbortController()};
     const secrets=Object.values(s.keys).filter(Boolean);
     const redact=value=>secrets.reduce((str,key)=>str.split(key).join('[redacted]'),String(value)).split(instance).join('[session files]');
     const log=msg=>{job.messages.push(redact(msg));if(job.messages.length>500){job.messages.shift();job.offset++;}};
     s.jobs.set(job.id,job);s.active=job;runningJobs++;
     const timer=setTimeout(()=>{job.timedOut=true;job.controller.abort();},jobTimeoutMs);timer.unref();
-    job.promise=(async()=>{try{job.result=register(s,await work(job.controller.signal,log));job.state='complete';}catch(e){
+    job.promise=(async()=>{try{job.result=register(s,await work(job.controller.signal,log,value=>{job.providerJob=value;}));job.state='complete';}catch(e){
       job.error=job.controller.signal.aborted?`${job.timedOut?'Time limit reached':'Cancelled locally'}. Submitted cloud jobs may still complete and incur charges.`:redact(e.message);job.state='failed';
     }finally{clearTimeout(timer);s.active=null;runningJobs--;s.lastSeen=Date.now();}})();return {id:job.id};
+  }
+  async function releaseBatch(s,rowId){
+    if(!s.batch)return;
+    if(s.batch.rowId!==rowId)throw new Error('Another batch row owns this workspace.');
+    if(s.active||s.upload)throw new Error('Wait for cancellation/upload/render to finish before releasing the row.');
+    const dir=path.join(s.dir,'batch');await removeOwned(dir,s.dir);
+    for(const [id,file] of s.media)if(file.startsWith(dir+path.sep))s.media.delete(id);
+    if(s.batch.jobId)s.jobs.delete(s.batch.jobId);s.batch=null;
   }
   async function latest(s,signal,log){
     const root=path.join(s.dir,'renders'),entries=await fs.readdir(root,{withFileTypes:true}).catch(()=>[]);
@@ -115,26 +123,54 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
       }
       if(route.startsWith('/api/')){
         if(!s||!equal(req.headers['x-studio-token'],s.token))return json(res,403,{error:'Session expired. Refresh this page and enter your keys again.'});
-        if(route==='/api/init'&&req.method==='GET')return json(res,200,{methods:METHODS,prompt:DEFAULT_PROMPT,keys:credentials(s),hosted,maxUploadBytes,activeJob:s.active?.id||null});
+        if(route==='/api/init'&&req.method==='GET')return json(res,200,{methods:METHODS,prompt:DEFAULT_PROMPT,keys:credentials(s),hosted,maxUploadBytes,activeJob:s.active?.id||null,activeBatch:s.batch?.rowId||null});
+        if(route==='/api/batch'&&req.method==='GET')return json(res,200,s.batch?{rowId:s.batch.rowId,jobId:s.batch.jobId,uploads:Object.fromEntries([...s.batch.uploads].map(([slot,{file,...info}])=>[slot,info]))}:{});
+        if(route==='/api/batch/row'&&req.method==='POST'){
+          const {rowId}=await body(req);if(typeof rowId!=='string'||!/^[-a-zA-Z0-9]{1,80}$/.test(rowId))throw new Error('Invalid batch row ID.');
+          if(s.batch?.rowId===rowId)return json(res,200,{rowId,jobId:s.batch.jobId});
+          if(s.batch||s.active||s.upload)throw new Error('Finish or release the current workspace before starting another batch row.');
+          s.batch={rowId,jobId:null,uploads:new Map(),bytes:0};return json(res,200,{rowId});
+        }
+        if(route==='/api/batch/release'&&req.method==='POST'){const {rowId}=await body(req);await releaseBatch(s,rowId);return json(res,200,{});}
         if(route==='/api/keys'&&req.method==='POST'){
           const value=await body(req);for(const p of ['fal','kie'])if(typeof value[p]==='string'&&value[p].trim()){if(value[p].length>4096)throw new Error('API key is too long');s.keys[p]=value[p].trim();s.keySetAt=Date.now();}return json(res,200,credentials(s));
         }
         if(route==='/api/keys'&&req.method==='DELETE'){s.keys={fal:'',kie:''};return json(res,200,credentials(s));}
-        if(route==='/api/upload'&&req.method==='POST'){
+        if((route==='/api/upload'||route==='/api/batch/upload')&&req.method==='POST'){
+          const batch=route==='/api/batch/upload'?s.batch:null,slot=url.searchParams.get('slot');
+          if(route==='/api/batch/upload'&&(!batch||batch.rowId!==url.searchParams.get('rowId')||!['a','b'].includes(slot)))throw new Error('Invalid batch workspace or slot.');
+          if(!batch&&s.batch)throw new Error('Finish or release the batch workspace first.');
           if(s.upload||s.active)throw new Error('Wait for your current upload or render to finish.');
-          if(s.uploads.size>=8)throw new Error('Session upload limit reached. Download your results and end this session to start fresh.');
-          const id=randomUUID(),file=path.join(s.dir,'uploads',`${id}.video`);let count=0;
+          if(batch&&(batch.jobId||batch.uploads.has(slot)))throw new Error('This batch slot is already uploaded or submitted. Resume the existing row.');
+          if(!batch&&s.uploads.size>=8)throw new Error('Session upload limit reached. Download your results and end this session to start fresh.');
+          const id=randomUUID(),file=path.join(s.dir,batch?'batch':'uploads',`${id}.video`);let count=0;
           const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10*60*1000);timer.unref();
-          const limiter=new Transform({transform(chunk,encoding,done){count+=chunk.length;done(count>maxUploadBytes||s.uploadBytes+count>2*maxUploadBytes?new Error(`Upload limit: ${Math.round(maxUploadBytes/1024/1024)} MB per video, twice that per session. End this session to start fresh.`):null,chunk);}});
+          const limiter=new Transform({transform(chunk,encoding,done){count+=chunk.length;done(count>maxUploadBytes||(batch?batch.bytes:s.uploadBytes)+count>2*maxUploadBytes?new Error(`Upload limit: ${Math.round(maxUploadBytes/1024/1024)} MB per video, twice that per workspace.`):null,chunk);}});
           const task={controller};s.upload=task;
           task.promise=(async()=>{
             await fs.mkdir(path.dirname(file),{recursive:true});await pipeline(req,limiter,createWriteStream(file),{signal:controller.signal});
             const info=await probe(file,controller.signal,true);if(info.duration>600||info.width>4096||info.height>4096)throw new Error('Maximum input: 10 minutes and 4096 pixels on either side.');
-            s.uploads.set(id,file);s.uploadBytes+=count;return {id,name:String(url.searchParams.get('name')||'Video').slice(0,200),url:mediaURL(s,file),...info};
+            const metadata={id,name:String(url.searchParams.get('name')||'Video').slice(0,200),url:mediaURL(s,file),...info};
+            if(batch){batch.uploads.set(slot,{...metadata,file});batch.bytes+=count;}else{s.uploads.set(id,file);s.uploadBytes+=count;}
+            return metadata;
           })();
           try{return json(res,200,await task.promise);}catch(e){await fs.rm(file,{force:true});throw e;}finally{clearTimeout(timer);s.upload=null;}
         }
+        if(route==='/api/batch/process'&&req.method==='POST'){
+          const o=await body(req),batch=s.batch;
+          if(!batch||batch.rowId!==o.rowId)throw new Error('Batch workspace no longer exists. Review this row before retrying.');
+          if(batch.jobId)return json(res,202,{id:batch.jobId}); // Idempotent within this session, including a lost POST response.
+          if(s.upload)throw new Error('Wait for the upload to finish.');
+          const a=batch.uploads.get('a'),b=batch.uploads.get('b');if(!a||!b)throw new Error('Upload both batch videos first.');
+          const options={...o,a:a.file,b:b.file,aEnd:a.duration,bStart:0};
+          const method=validateOptions(options),key=s.keys[method.provider];
+          if(method.provider!=='local'&&!key)throw Object.assign(new Error(`Enter your own ${method.provider} key before resuming the batch.`),{status:428});
+          const dir=path.join(s.dir,'batch','render');
+          const started=startJob(s,(signal,log,onProviderJob)=>renderVideo(options,{dir,key,signal,log,onProviderJob,outputOnly:true}));
+          batch.jobId=started.id;return json(res,202,started);
+        }
         if(route==='/api/process'&&req.method==='POST'){
+          if(s.batch)throw new Error('Finish or release the batch workspace first.');
           const o=await body(req),method=validateOptions(o);
           if(!s.uploads.has(o.a)||!s.uploads.has(o.b))throw new Error('Upload both videos in your own session first.');
           if(s.upload)throw new Error('Wait for your upload to finish.');
@@ -143,10 +179,11 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
           const options={...o,a:s.uploads.get(o.a),b:s.uploads.get(o.b)},dir=path.join(s.dir,'renders',`${Date.now()}-${randomUUID().slice(0,8)}`);
           const started=startJob(s,(signal,log)=>renderVideo(options,{dir,key,signal,log}));s.renderCount++;return json(res,202,started);
         }
-        if(route==='/api/latest'&&req.method==='POST')return json(res,202,startJob(s,(signal,log)=>latest(s,signal,log)));
+        if(route==='/api/latest'&&req.method==='POST'){if(s.batch)throw new Error('Finish or release the batch workspace first.');return json(res,202,startJob(s,(signal,log)=>latest(s,signal,log)));}
+        if(route==='/api/batch/cancel'&&req.method==='POST'){const {rowId}=await body(req);if(s.batch?.rowId!==rowId)throw new Error('Batch row changed.');if(s.batch.jobId)s.jobs.get(s.batch.jobId)?.controller.abort();s.upload?.controller.abort();return json(res,200,{});}
         if(route==='/api/cancel'&&req.method==='POST'){s.active?.controller.abort();return json(res,200,{});}
         if(route.startsWith('/api/jobs/')&&req.method==='GET'){
-          const j=s.jobs.get(route.slice('/api/jobs/'.length));if(!j)return json(res,404,{error:'Job not found in your session'});return json(res,200,{id:j.id,state:j.state,messages:j.messages,offset:j.offset,result:j.result,error:j.error});
+          const j=s.jobs.get(route.slice('/api/jobs/'.length));if(!j)return json(res,404,{error:'Job not found in your session'});return json(res,200,{id:j.id,state:j.state,messages:j.messages,offset:j.offset,result:j.result,error:j.error,providerJob:j.providerJob});
         }
         if(route==='/api/logout'&&req.method==='POST'){
           await endSession(s);res.setHeader('Set-Cookie',`studio_session=; Max-Age=0; HttpOnly; SameSite=Strict; Path=/${hosted?'; Secure':''}`);return json(res,200,{});
@@ -157,12 +194,12 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
       if(route.startsWith('/media/')&&['GET','HEAD'].includes(req.method)){
         const file=s?.media.get(route.slice('/media/'.length));if(!file)return json(res,404,{error:'Media not found in your session'});return await sendFile(req,res,file,url.searchParams.get('download')==='1');
       }
-      const staticFiles={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/renderer.js':'renderer.js','/browser.js':'browser.js'};
+      const staticFiles={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/renderer.js':'renderer.js','/browser.js':'browser.js','/batch.js':'batch.js','/batch-format.js':'batch-format.js','/batch-zip.js':'batch-zip.js'};
       if(staticFiles[route]&&req.method==='GET'){
         const name=staticFiles[route],types={html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8'};
         res.writeHead(200,{'Content-Type':types[name.split('.').at(-1)],'Cache-Control':'no-store'});res.end(await fs.readFile(path.join(__dirname,'public',name)));return;
       }json(res,404,{error:'Not found'});
-    }catch(e){if(!res.headersSent&&!res.destroyed)json(res,400,{error:e.message});else res.destroy();}
+    }catch(e){if(!res.headersSent&&!res.destroyed)json(res,e.status||400,{error:e.message});else res.destroy();}
   });
   server.requestTimeout=10*60*1000;
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,hosted?'0.0.0.0':'127.0.0.1',resolve);});

@@ -21,7 +21,7 @@
       <p id="key-status" class="key-status" role="status">Checking session...</p>
       <details class="session-details"><summary>Privacy, session limits &amp; uploads</summary>
         <p class="help">Keys stay in server memory for your browser session, never saved or shared with other users. Keys expire after 8 hours; idle sessions and files expire after 2 hours. Use Clear keys or End my session to remove them.</p>
-        <p class="help" id="hosting-note">Videos go to this app's processing server; only boundary images go to fal/KIE. Download results before ending your session. Limits: 512 MB per video, 1 GB uploads and 5 renders per session; clips up to 10 minutes.</p>
+        <p class="help" id="hosting-note">Videos go to this app's processing server; only boundary images go to fal/KIE. Download results before ending your session. Single-pair limits: 512 MB per video, 1 GB uploads and 5 renders per session; clips up to 10 minutes. CSV batches recycle a separate two-video workspace after each saved row. Batch checkpoints and buffered ZIPs stay in this browser until you clear them.</p>
       </details>
     </div>
     <div class="credential-inputs">
@@ -32,6 +32,8 @@
     </div>
   </section>
 
+  <nav class="actions mode-tabs" aria-label="Workflow"><button id="mode-single" aria-pressed="true">Single clip pair</button><button id="mode-batch" aria-pressed="false">CSV batch</button></nav>
+  <div id="single-inputs">
   <div class="step-heading"><h2><span class="step-number">1</span> Choose your clips</h2><p>Set the end of A and the start of B.</p></div>
   <section class="sources" aria-label="Source videos">
     <article class="card source-card">
@@ -48,6 +50,7 @@
     </article>
   </section>
 
+  </div>
   <section class="workspace">
     <article class="card settings">
       <h2><span class="step-number">2</span> Build the transition</h2>
@@ -61,6 +64,35 @@
       <details><summary>Audio &amp; output details</summary><p class="help">Source audio is kept with short fades around silent bridges. Dissolves crossfade audio. Output fits clip A, up to 1920 px wide.</p></details>
       <div class="actions generate-actions"><button id="generate" class="primary" disabled>Create transition</button><button id="cancel" hidden>Cancel</button></div>
       <p class="help" id="generate-hint">Choose both clips to continue.</p>
+    </article>
+    <article class="card batch-panel" id="batch-panel" hidden>
+      <div class="section-label"><h2>Process a CSV batch</h2><span class="badge">UP TO 10,000 PAIRS</span></div>
+      <p class="help">Every row produces the full first video + bridge + full second video, using the transition settings on the left (above on mobile). Dissolve overlaps the two clips instead. Rows run one at a time. Settings and CSV roots lock at the first start; create a new batch to change them.</p>
+      <details open><summary>1. Match your local files</summary>
+        <p class="help">CSV columns: <code>first_half,second_half,output</code>. Use paths relative to the selected source folder, and an output name ending in .mp4. Absolute paths need the matching root below. Nothing uploads until you start.</p>
+        <div class="fields"><label>Source root in CSV (absolute paths only)<input id="batch-input-root" placeholder="C:\Videos or /home/me/videos" spellcheck="false"></label><label>Output root in CSV (absolute paths only)<input id="batch-output-root" placeholder="C:\Results or /home/me/results" spellcheck="false"></label></div>
+        <div class="fields"><label>Select source folder<input id="batch-folder" type="file" webkitdirectory multiple></label><label>Upload CSV<input id="batch-csv" type="file" accept=".csv,text/csv"></label></div>
+        <p class="help" id="batch-source-info">Select the common parent folder containing both halves.</p>
+        <div class="actions"><button id="batch-template" class="quiet">Download example CSV</button><button id="batch-validate">Validate / match files</button></div>
+      </details>
+      <details open><summary>2. Choose where results go</summary>
+        <label>Output destination<select id="batch-destination"><option value="zip">ZIP parts (all modern browsers)</option><option value="folder">Save directly to a folder (supported browsers)</option></select></label>
+        <div class="actions"><button id="batch-output-folder">Choose output folder</button><span id="batch-destination-info" class="help">ZIPs keep relative output folders and filenames.</span></div>
+        <p class="help">Folder mode streams each finished MP4 to disk. ZIP mode checkpoints results in this browser and pauses after 20 files or 250 MB. Download and confirm each part to continue. Existing files are never overwritten.</p>
+      </details>
+      <details><summary>3. Optional planning estimates</summary>
+        <div class="fields"><label>Estimated provider cost per row<input id="batch-unit-cost" type="number" min="0" step="any" placeholder="Optional, from your provider"></label><label>Cost unit<select id="batch-cost-unit"><option>USD</option><option>credits</option></select></label></div>
+        <p class="help">A planning estimate you enter, not a live quote or spending limit. Local methods cost 0 provider credits. Cloud prices depend on your model/account; fal compute time is not the bridge duration. Use a small pilot to estimate cost per row.</p>
+      </details>
+      <div class="batch-metrics" id="batch-metrics" aria-live="polite">No CSV loaded.</div>
+      <progress id="batch-progress" value="0" max="1" aria-label="Batch progress"></progress>
+      <div class="actions"><button id="batch-start" class="primary">Start / resume batch</button><button id="batch-pause" disabled>Pause after this row</button><button id="batch-cancel" disabled>Cancel current row &amp; pause</button></div>
+      <div class="actions"><button id="batch-download" disabled>Download ZIP part</button><button id="batch-ack" disabled>ZIP saved: clear part</button><button id="batch-report">Download row report</button></div>
+      <div class="actions"><button id="batch-retry" class="quiet">Retry failed / interrupted rows</button><button id="batch-skip" class="quiet">Skip interrupted rows</button><button id="batch-reset" class="quiet">Clear batch checkpoint</button></div>
+      <p id="batch-status" role="status" aria-live="polite">Load a CSV to begin.</p>
+      <p class="help">Keep this tab open and your computer awake while processing. Reloading restores the queue, but you must reselect source/destination folders. Keys are never checkpointed. A server restart can lose the current job; check its provider request before retrying. Free hosting is suitable for pilots, not guaranteed unattended bulk production.</p>
+      <div class="batch-table-wrap"><table><thead><tr><th>Row</th><th>Output</th><th>Status / error</th></tr></thead><tbody id="batch-rows"></tbody></table></div>
+      <div class="actions"><button id="batch-prev" class="quiet">Previous 50</button><span id="batch-page" class="help"></span><button id="batch-next" class="quiet">Next 50</button></div>
     </article>
     <article class="card review">
       <div class="section-label"><h2><span class="step-number">3</span> Review &amp; export</h2><span id="result-status" class="badge">AWAITING CLIPS</span></div>
@@ -76,6 +108,6 @@
   </section>
   <footer>Try FILM or RIFE for a small pose gap; Kling or Seedance for new motion. Inspect fingers, cards and chips at both joins.</footer>
 </main>
-<script src="browser.js"></script><script src="renderer.js"></script>
+<script src="browser.js"></script><script src="renderer.js"></script><script src="batch-format.js"></script><script src="batch-zip.js"></script><script src="batch.js"></script>
 </body>
 </html>

@@ -8,7 +8,7 @@
       sessionRequest ||= fetch('/api/session').then(async r=>{const data=await r.json();if(!r.ok)throw new Error(data.error||'Could not open session');return data.token;}).catch(e=>{sessionRequest=null;throw e;});token=await sessionRequest;
     }
     const response=await fetch(route,{method,headers:{'X-Studio-Token':token,...(body!==undefined?{'Content-Type':'application/json'}:{})},body:body===undefined?undefined:JSON.stringify(body)});
-    const data=await response.json();if(!response.ok)throw new Error(data.error||`Request failed (${response.status})`);return data;
+    const data=await response.json();if(!response.ok)throw Object.assign(new Error(data.error||`Request failed (${response.status})`),{status:response.status});return data;
   }
   function pick(){return new Promise((resolve,reject)=>{
     const input=document.createElement('input');input.type='file';input.accept='video/*,.mkv,.avi,.mov';
@@ -45,6 +45,13 @@
   }
   function download(url){const a=document.createElement('a');a.href=`${url}?download=1`;a.download='';document.body.append(a);a.click();a.remove();}
   window.studio={
+    batchAPI:api,
+    batchUpload:async(file,rowId,slot,signal)=>{
+      await api('/api/init');
+      if(file.size>maxUploadBytes)throw Object.assign(new Error('Video exceeds the 512 MB input limit.'),{status:400});
+      const response=await fetch(`/api/batch/upload?rowId=${encodeURIComponent(rowId)}&slot=${slot}&name=${encodeURIComponent(file.name)}`,{method:'POST',headers:{'X-Studio-Token':token},body:file,signal});
+      const data=await response.json();if(!response.ok)throw Object.assign(new Error(data.error),{status:response.status});return data;
+    },
     init:async()=>{const data=await api('/api/init');hosted=data.hosted;maxUploadBytes=data.maxUploadBytes;document.getElementById('app-mode').textContent=hosted?'TEAM WEB APP':'LOCAL WEB APP';document.getElementById('shutdown').hidden=hosted;return data;},pick,resume:poll,
     setKeys:value=>api('/api/keys','POST',value),forgetKeys:()=>api('/api/keys','DELETE'),
     process:options=>run('/api/process',options),latestResult:()=>run('/api/latest'),
@@ -60,7 +67,7 @@
     },onProgress:fn=>progress=fn
   };
   document.getElementById('end-session').onclick=async()=>{
-    if(!confirm('End your session? Your keys and temporary videos/results will be removed. Download results first. Submitted cloud jobs may still be billed.'))return;
+    if(!confirm('End your server session? Your keys and temporary server videos/results will be removed. Browser batch checkpoints and buffered ZIPs remain until Clear batch checkpoint. Download results first. Submitted cloud jobs may still be billed.'))return;
     try{await api('/api/logout','POST');location.reload();}catch(e){alert(e.message);}
   };
   document.getElementById('shutdown').onclick=async()=>{

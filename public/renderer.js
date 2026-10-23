@@ -117,7 +117,7 @@ window.studio.init().then(data=>{
     $('method').append(group);
   }
   $('prompt').value=data.prompt;keyStatus(data.keys);methodChange();
-  if(data.activeJob){
+  if(data.activeJob&&!data.activeBatch){
     status('Your previous render is still running. Use Resume render to reconnect.');
     const resume=document.createElement('button');resume.textContent='Resume render';
     resume.onclick=async()=>{resume.disabled=true;setBusy(true);try{receiveResult(await window.studio.resume(data.activeJob));status('Result restored.');}catch(e){fail(e);}finally{setBusy(false);resume.remove();}};
@@ -125,3 +125,8 @@ window.studio.init().then(data=>{
   }
 }).catch(fail);
 readiness();
+window.studioUI={
+  isBusy:()=>busy||importing,lock:setBusy,applyKeys,
+  settings:()=>({method:$('method').value,duration:Number($('duration').value),fps:Number($('fps').value),prompt:$('prompt').value,mute:$('mute').checked}),
+  restoreSettings:o=>{$('method').value=o.method;methodChange();for(const id of ['duration','fps','prompt'])$(id).value=o[id];$('mute').checked=o.mute;}
+};
