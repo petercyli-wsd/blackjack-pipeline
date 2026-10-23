@@ -10,18 +10,21 @@ const METHODS = [
 ];
 const DEFAULT_PROMPT = 'Locked-off camera. The same casino dealer makes one small, natural, continuous movement from the starting pose to the ending pose. Preserve identity, face, clothing, table, lighting and background. Keep the exact cards, chips, markings and objects consistent. Natural hands and fingers. No cuts, camera movement, added objects or extra actions.';
 function getMethod(id) { const m = METHODS.find(m=>m.id===id); if(!m) throw new Error('Unknown interpolation method'); return m; }
+const {parse:frameRate}=require('../public/frame-rate');
 function validateOptions(o) {
   const m=getMethod(o.method);
-  for(const k of ['duration','aEnd','bStart','fps']) if(!Number.isFinite(o[k])) throw new Error(`Invalid ${k}`);
+  for(const k of ['duration','aEnd','bStart']) if(!Number.isFinite(o[k])) throw new Error(`Invalid ${k}`);
   if(o.duration<m.min || o.duration>m.max || (m.provider!=='local' && m.kind!=='interpolation' && !Number.isInteger(o.duration))) throw new Error(`Duration must be ${m.min}–${m.max} seconds${m.kind!=='interpolation' && m.provider!=='local'?' (whole seconds)':''}`);
-  if(![24,25,30,60].includes(o.fps)) throw new Error('Unsupported frame rate');
+  frameRate(o.fps,true);
   if(o.aEnd<=0 || o.bStart<0) throw new Error('Invalid cut points');
   if(typeof o.prompt!=='string' || o.prompt.length>2000) throw new Error('Prompt must be at most 2000 characters');
   return m;
 }
 function falInput(m, a, b, o) {
-  if(m.kind==='interpolation') return {start_image_url:a,end_image_url:b,output_type:'video',num_frames:Math.max(1,Math.round(o.duration*o.fps)-2),include_start:true,include_end:true,fps:o.fps};
+  // fal's FILM/RIFE video container FPS is integer-only. The local assembly
+  // converts it to the exact requested output rate; frame count uses that rate.
+  if(m.kind==='interpolation') return {start_image_url:a,end_image_url:b,output_type:'video',num_frames:Math.max(1,Math.round(o.duration*frameRate(o.fps).value)-2),include_start:true,include_end:true,fps:Math.round(frameRate(o.fps).value)};
   if(m.id==='seedance') return {image_url:a,end_image_url:b,prompt:o.prompt,duration:String(o.duration),resolution:'720p',aspect_ratio:'auto',generate_audio:false,codec:'H264'};
   return {start_image_url:a,end_image_url:b,prompt:o.prompt,duration:String(o.duration),generate_audio:false};
 }
-module.exports={METHODS,DEFAULT_PROMPT,getMethod,validateOptions,falInput};
+module.exports={METHODS,DEFAULT_PROMPT,getMethod,validateOptions,falInput,frameRate};

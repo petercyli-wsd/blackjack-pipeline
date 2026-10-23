@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const {getMethod,validateOptions,falInput}=require('../src/models');
 const base={method:'film',duration:0.4,aEnd:2,bStart:0,fps:30,prompt:'Smooth transition'};
 test('duration and cut point validation rejects invalid and incompatible requests',()=>{
-  for(const o of [{duration:NaN},{aEnd:0},{bStart:-1},{fps:29},{method:'missing'},{method:'kling-fal',duration:0.4},{method:'seedance',duration:3},{method:'kling-kie',duration:3.5}]) assert.throws(()=>validateOptions({...base,...o}));
+  for(const o of [{duration:NaN},{aEnd:0},{bStart:-1},{fps:61},{method:'missing'},{method:'kling-fal',duration:0.4},{method:'seedance',duration:3},{method:'kling-kie',duration:3.5}]) assert.throws(()=>validateOptions({...base,...o}));
   assert.equal(validateOptions(base).id,'film');
 });
 test('FILM requests intermediate frames with explicit endpoint inclusion',()=>{

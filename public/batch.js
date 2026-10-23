@@ -192,6 +192,7 @@
       await ui.applyKeys();
       if(!queue.settings){match();await checkpoint({allRows:true});}else ui.restoreSettings(queue.settings);
       const settings=queue.settings||ui.settings();
+      window.StudioFrameRate.parse(settings.fps,true);
       const init=await window.studio.init(),method=init.methods.find(m=>m.id===settings.method);
       if(!method)throw new Error('The selected method is no longer available.');
       if(method.provider!=='local'&&!init.keys[method.provider])throw new Error(`Enter your ${method.provider} key above and resume.`);

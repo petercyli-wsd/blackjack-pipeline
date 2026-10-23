@@ -43,7 +43,7 @@ async function browser(env,{folder}={}){
   if(folder)w.showDirectoryPicker=async()=>folder;
   // Avoid 1.5-second polling waits; preserve asynchronous ordering.
   const timeout=w.setTimeout.bind(w);w.setTimeout=(fn,ms,...args)=>timeout(fn,ms===1500||ms===5000?1:ms,...args);
-  for(const name of ['browser.js','renderer.js','batch-format.js','batch-zip.js','batch.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
+  for(const name of ['browser.js','frame-rate.js','renderer.js','batch-format.js','batch-zip.js','batch.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
   await until(()=>$('method').options.length===METHODS.length&&!$('batch-csv').disabled).catch(e=>{throw new Error(`${e.message}: ${$('batch-status').textContent}; ${$('status').textContent}; methods=${$('method').options.length}`);});
   const selectFiles=()=>{
     Object.defineProperty($('batch-folder'),'files',{configurable:true,value:['a.mp4','b.mp4'].map(name=>({name,size:10,lastModified:1,webkitRelativePath:'videos/'+name}))});$('batch-folder').onchange();

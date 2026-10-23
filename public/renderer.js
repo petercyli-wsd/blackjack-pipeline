@@ -21,9 +21,10 @@ function offerReconnect(id,requestId){
   $('history-actions').append(button);
 }
 function readiness(){
+  try{window.StudioFrameRate.parse($('fps').value,true);$('fps').setCustomValidity('');}catch(e){$('fps').setCustomValidity(e.message);}
   const m=selectedMethod(),locked=busy||importing;
   const hasKey=m&&(m.provider==='local'||keyReady[m.provider]||$(`${m.provider}-key`).value.trim());
-  $('generate').disabled=!!locked||!clips.a||!clips.b||!hasKey;
+  $('generate').disabled=!!locked||!clips.a||!clips.b||!hasKey||!$('fps').validity.valid;
   $('save-keys').disabled=!!locked||!hasPendingKeys();
   $('forget-keys').disabled=!!locked||(!keyReady.fal&&!keyReady.kie&&!hasPendingKeys());
   for(const slot of ['a','b']){
@@ -31,7 +32,7 @@ function readiness(){
     $(slot==='a'?'a-end':'b-start').disabled=!!locked||!clips[slot];
     $(`use-${slot}`).disabled=!!locked||!clips[slot];
   }
-  $('generate-hint').textContent=busy?'Processing. You can cancel below.':importing?'Uploading your clip...':!m?'Loading methods...':!clips.a||!clips.b?'Choose both clips to continue.':!hasKey?`Add your ${m.provider==='fal'?'fal':'KIE'} key in Provider credentials above.`:'Ready. Your output includes clip A, the transition and clip B.';
+  $('generate-hint').textContent=busy?'Processing. You can cancel below.':importing?'Uploading your clip...':!m?'Loading methods...':!clips.a||!clips.b?'Choose both clips to continue.':!hasKey?`Add your ${m.provider==='fal'?'fal':'KIE'} key in Provider credentials above.`:!$('fps').validity.valid?$('fps').validationMessage:'Ready. Your output includes clip A, the transition and clip B.';
   if(m){
     $('provider-note').textContent=m.provider==='local'?'Runs on this server. No provider credits.':`${m.provider==='fal'?'fal':'KIE'} ${keyReady[m.provider]?'key ready':hasKey?'key entered':'key needed'} - uses your provider credits`;
     $('provider-note').classList.toggle('needs-key',!hasKey);
@@ -73,7 +74,7 @@ for(const slot of ['a','b']){
     try{
       const c=await window.studio.pick();if(!c)return;clips[slot]=c;
       $(`video-${slot}`).src=c.url;
-      $(`meta-${slot}`).textContent=`${c.name} | ${c.width} x ${c.height} | ${c.duration.toFixed(2)} s | ${c.fps.toFixed(2)} fps${c.audio?'':' | no audio'}`;
+      $(`meta-${slot}`).textContent=`${c.name} | ${c.width} x ${c.height} | ${c.duration.toFixed(2)} s | ${c.fps.toFixed(6)} fps${c.fpsRational?` (${c.fpsRational})`:''}${c.audio?'':' | no audio'}`;
       const cut=$(slot==='a'?'a-end':'b-start');cut.max=c.duration;cut.value=slot==='a'?c.duration:0;
       status(clips.a&&clips.b?'Both clips ready. Choose a method and create your transition.':`Clip ${slot.toUpperCase()} ready. Choose the other clip to continue.`);
     }catch(e){fail(e);}finally{importing=false;readiness();}
@@ -92,7 +93,7 @@ function showResult(){
   const plain=$('comparison').value==='no-bridge',full=reviewMode==='full';
   $('result').pause();$('result').src=plain?(full?result.noBridgeUrl:result.noBridgePreview):(full?result.url:result.preview);
   const label=plain?'No bridge - direct cut':'With transition',duration=plain?result.noBridgeDuration:result.duration;
-  $('result-info').textContent=`${label} | ${duration.toFixed(2)} seconds total | ${result.width} x ${result.height} | ${full?'Full video':'Join preview'}. Switching versions restarts playback.`;
+  $('result-info').textContent=`${label} | ${duration.toFixed(2)} seconds total | ${result.width} x ${result.height}${Number.isFinite(result.fps)?` | ${result.fps.toFixed(6)} fps (${result.fpsRational})`:''} | ${full?'Full video':'Join preview'}. Switching versions restarts playback.`;
   $('export').textContent=plain?'Export direct cut':'Export transition';
   $('preview').setAttribute('aria-pressed',String(!full));$('full').setAttribute('aria-pressed',String(full));
 }
@@ -103,16 +104,18 @@ function receiveResult(r){
   showResult();$('result-status').textContent='READY TO REVIEW';
 }
 $('method').onchange=methodChange;
+$('fps').addEventListener('input',readiness);
 $('latest-result').onclick=async()=>{
   setBusy(true);status('Opening your latest result and preparing its comparison...');
   try{receiveResult(await window.studio.latestResult());status('Previous result loaded. No new AI generation was requested.');}catch(e){renderFailure(e);}finally{setBusy(false);}
 };
 $('generate').onclick=async()=>{
   if(!clips.a||!clips.b||busy||importing)return;
+  if(!$('fps').reportValidity())return;
   setBusy(true);$('log').textContent='';status('Starting...');$('result-status').textContent='PROCESSING';
   try{
     await applyKeys();
-    const r=await window.studio.process({a:clips.a.id,b:clips.b.id,method:$('method').value,duration:Number($('duration').value),aEnd:Number($('a-end').value),bStart:Number($('b-start').value),fps:Number($('fps').value),prompt:$('prompt').value,mute:$('mute').checked});
+    const r=await window.studio.process({a:clips.a.id,b:clips.b.id,method:$('method').value,duration:Number($('duration').value),aEnd:Number($('a-end').value),bStart:Number($('b-start').value),fps:$('fps').value.trim(),prompt:$('prompt').value,mute:$('mute').checked});
     receiveResult(r);status('Complete. Review both joins before exporting.');
   }catch(e){renderFailure(e);}finally{setBusy(false);}
 };
@@ -141,6 +144,6 @@ window.studio.init().then(data=>{
 readiness();
 window.studioUI={
   isBusy:()=>busy||importing,lock:setBusy,applyKeys,
-  settings:()=>({method:$('method').value,duration:Number($('duration').value),fps:Number($('fps').value),prompt:$('prompt').value,mute:$('mute').checked}),
-  restoreSettings:o=>{$('method').value=o.method;methodChange();for(const id of ['duration','fps','prompt'])$(id).value=o[id];$('mute').checked=o.mute;}
+  settings:()=>({method:$('method').value,duration:Number($('duration').value),fps:$('fps').value.trim(),prompt:$('prompt').value,mute:$('mute').checked}),
+  restoreSettings:o=>{$('method').value=o.method;methodChange();for(const id of ['duration','fps','prompt'])$(id).value=o[id];$('mute').checked=o.mute;readiness();}
 };
