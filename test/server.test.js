@@ -20,9 +20,11 @@ test('web upload, job, comparison, downloads, restore, cancellation and credenti
     const configured=await api('/api/keys','POST',{fal:'fake-key-do-not-save'});assert.equal(configured.fal,true);assert.ok(!JSON.stringify(configured).includes('fake-key'));
     await api('/api/keys','DELETE');assert.equal((await api('/api/init')).keys.fal,false);
     const upload=await fetch(app.url+'/api/upload?name=sample.mp4',{method:'POST',headers:{Cookie,'X-Studio-Token':token},body:await fs.readFile(clip)});assert.equal(upload.status,200);const item=await upload.json();
-    const options={a:item.id,b:item.id,method:'blend',duration:0.2,aEnd:0.8,bStart:0.2,fps:30,prompt:'test',mute:false};
+    const options={a:item.id,b:item.id,method:'blend',duration:0.2,aEnd:0.8,bStart:0.2,fps:30,prompt:'test',mute:false,requestId:'first-render-request'};
     async function wait(id){for(let i=0;i<300;i++){const job=await api(`/api/jobs/${id}`);if(job.state!=='running')return job;await delay(100);}throw new Error('Job timeout');}
     const submitted=await api('/api/process','POST',options);const job=await wait(submitted.id);assert.equal(job.state,'complete',job.error);
+    assert.equal((await api('/api/request-jobs/first-render-request')).id,submitted.id);
+    assert.equal((await fetch(app.url+'/api/request-jobs/first-render-request')).status,403);
     assert.ok(Math.abs(job.result.duration-1.8)<0.08);assert.ok(Math.abs(job.result.noBridgeDuration-1.6)<0.08);
     const partial=await fetch(app.url+job.result.url,{headers:{Cookie,Range:'bytes=0-31'}});assert.equal(partial.status,206);assert.equal((await partial.arrayBuffer()).byteLength,32);
     const download=await fetch(app.url+job.result.noBridgeUrl+'?download=1',{headers:{Cookie}});assert.match(download.headers.get('content-disposition'),/attachment/);await download.arrayBuffer();

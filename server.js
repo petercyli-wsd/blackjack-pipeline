@@ -67,10 +67,11 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
   function credentials(s){if(Date.now()-s.keySetAt>keyTtlMs)s.keys={fal:'',kie:''};return {fal:!!s.keys.fal,kie:!!s.keys.kie};}
   function mediaURL(s,file){const id=randomUUID();s.media.set(id,file);return `/media/${id}`;}
   function register(s,r){return {id:randomUUID(),url:mediaURL(s,r.output),preview:r.preview?mediaURL(s,r.preview):null,noBridgeUrl:r.noBridge?mediaURL(s,r.noBridge):null,noBridgePreview:r.noBridgePreview?mediaURL(s,r.noBridgePreview):null,frames:r.frames.map(f=>mediaURL(s,f)),duration:r.duration,noBridgeDuration:r.noBridgeDuration,width:r.width,height:r.height};}
-  function startJob(s,work){
+  function startJob(s,work,requestId){
+    if(requestId!==undefined&&(typeof requestId!=='string'||!/^[-a-zA-Z0-9]{1,80}$/.test(requestId)))throw new Error('Invalid render request reference.');
     if(s.active)throw new Error('Your session already has a running job. Wait or cancel it first.');
     if(runningJobs>=maxConcurrentJobs)throw Object.assign(new Error('The team server is rendering another job. Waiting for a slot.'),{status:429});
-    const job={id:randomUUID(),state:'running',messages:[],offset:0,controller:new AbortController()};
+    const job={id:randomUUID(),requestId,state:'running',messages:[],offset:0,controller:new AbortController()};
     const secrets=Object.values(s.keys).filter(Boolean);
     const redact=value=>secrets.reduce((str,key)=>str.split(key).join('[redacted]'),String(value)).split(instance).join('[session files]');
     const log=msg=>{job.messages.push(redact(msg));if(job.messages.length>500){job.messages.shift();job.offset++;}};
@@ -124,6 +125,11 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
       if(route.startsWith('/api/')){
         if(!s||!equal(req.headers['x-studio-token'],s.token))return json(res,403,{error:'Session expired. Refresh this page and enter your keys again.'});
         if(route==='/api/init'&&req.method==='GET')return json(res,200,{methods:METHODS,prompt:DEFAULT_PROMPT,keys:credentials(s),hosted,maxUploadBytes,activeJob:s.active?.id||null,activeBatch:s.batch?.rowId||null});
+        if(route.startsWith('/api/request-jobs/')&&req.method==='GET'){
+          const requestId=route.slice('/api/request-jobs/'.length),job=[...s.jobs.values()].find(j=>j.requestId===requestId);
+          if(!job)return json(res,404,{error:'That render request was not found in your server session. It may not have reached the server, or the server may have restarted. Check provider history before submitting again.'});
+          return json(res,200,{id:job.id});
+        }
         if(route==='/api/batch'&&req.method==='GET')return json(res,200,s.batch?{rowId:s.batch.rowId,jobId:s.batch.jobId,uploads:Object.fromEntries([...s.batch.uploads].map(([slot,{file,...info}])=>[slot,info]))}:{});
         if(route==='/api/batch/row'&&req.method==='POST'){
           const {rowId}=await body(req);if(typeof rowId!=='string'||!/^[-a-zA-Z0-9]{1,80}$/.test(rowId))throw new Error('Invalid batch row ID.');
@@ -177,9 +183,9 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
           if(s.renderCount>=5)throw new Error('Session render limit reached. Download your results and end this session to start fresh.');
           const key=s.keys[method.provider];if(method.provider!=='local'&&!key)throw new Error(`Enter your own ${method.provider} API key in Provider credentials first.`);
           const options={...o,a:s.uploads.get(o.a),b:s.uploads.get(o.b)},dir=path.join(s.dir,'renders',`${Date.now()}-${randomUUID().slice(0,8)}`);
-          const started=startJob(s,(signal,log)=>renderVideo(options,{dir,key,signal,log}));s.renderCount++;return json(res,202,started);
+          const started=startJob(s,(signal,log)=>renderVideo(options,{dir,key,signal,log}),o.requestId);s.renderCount++;return json(res,202,started);
         }
-        if(route==='/api/latest'&&req.method==='POST'){if(s.batch)throw new Error('Finish or release the batch workspace first.');return json(res,202,startJob(s,(signal,log)=>latest(s,signal,log)));}
+        if(route==='/api/latest'&&req.method==='POST'){if(s.batch)throw new Error('Finish or release the batch workspace first.');const o=await body(req);return json(res,202,startJob(s,(signal,log)=>latest(s,signal,log),o.requestId));}
         if(route==='/api/batch/cancel'&&req.method==='POST'){const {rowId}=await body(req);if(s.batch?.rowId!==rowId)throw new Error('Batch row changed.');if(s.batch.jobId)s.jobs.get(s.batch.jobId)?.controller.abort();s.upload?.controller.abort();return json(res,200,{});}
         if(route==='/api/cancel'&&req.method==='POST'){s.active?.controller.abort();return json(res,200,{});}
         if(route.startsWith('/api/jobs/')&&req.method==='GET'){

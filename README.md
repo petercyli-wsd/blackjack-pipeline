@@ -125,6 +125,12 @@ The method dropdown groups frame interpolation (FILM and RIFE), generative bridg
 
 The integration follows the [fal RIFE API schema](https://fal.ai/models/fal-ai/rife/api). No documented RIFE endpoint was found in KIE's public catalogue when this integration was added, so there is no KIE RIFE option. KIE's existing Kling method remains available. Tests mock RIFE requests; no paid RIFE generation was performed.
 
+### Empty response or disconnected render
+
+An `Unexpected end of JSON input` error from the browser does not by itself mean a bad fal key or unsupported RIFE model. It can mean the app received an empty/truncated response from its server or a gateway. The app now reports the operation and HTTP status, retries interrupted **read-only** status requests twice, and offers **Reconnect to render** if the connection still fails. Reconnection polls the existing job; it does not submit another generation. If the submission response itself was lost, a client request reference looks up that exact job, including when it has already finished. If the server/session was lost, check provider history before creating another paid request.
+
+If this persists, expand **Processing log** and inspect Render's logs/events at the same time for a restart, memory-limit event, or terminated FFmpeg process. Provider permission errors remain explicit errors with their stage/HTTP status. The hosted Docker build sets `FFMPEG_THREADS=1` for decoder, encoder and filter pools to reduce resource use; it does not change resolution/frame rate. This reduces memory pressure but cannot guarantee a large render fits Free hosting. Local runs keep FFmpeg defaults unless you set `FFMPEG_THREADS` (1–16). A child process killed by the host now reports termination instead of being mistaken for an empty successful output.
+
 Credentials stay visible at the top with compact buttons. Longer privacy/limit details are expandable. The selected method shows which key it needs; Create transition becomes available once both clips and the relevant key are present (including a key pasted but not yet applied).
 
 ## Sessions and limits
@@ -136,7 +142,7 @@ Credentials stay visible at the top with compact buttons. Longer privacy/limit d
 - Default limits: 10 browser sessions, one render at a time across the server, 512 MB per clip. Single-pair mode allows 1 GB uploaded, 8 uploads and 5 render attempts per session. Batch mode has a separate 1 GB/two-input workspace recycled after each saved row, without the single-pair render-count limit. Clips must be self-contained videos, at most 10 minutes and 4096 pixels per side. These are initial small-team limits, not load-tested sizing.
 - If another render is running, single-pair mode reports that the server is busy; retry later. CSV batch mode waits for capacity. `MAX_CONCURRENT_JOBS` and `MAX_SESSIONS` can be changed after checking server capacity.
 - A render times out after one hour. Uploads time out after ten minutes. Cancellation/timeout stops local processing and provider polling; already submitted cloud work may complete and be billed.
-- Refreshing during generation offers **Resume render**. **Open latest completed result** restores only your current session's last completed result. Other users' and earlier desktop results are inaccessible.
+- Refreshing during generation offers **Reconnect to render**. **Open latest completed result** restores only your current session's last completed result. Other users' and earlier desktop results are inaccessible.
 - Run exactly one Node process on one hosting instance. In-memory sessions do not support horizontal scaling. For larger deployment, use a job queue and shared session/object storage before scaling.
 - No persistent disk is required: results are intentionally temporary. Free hosting does not make fal/KIE generations free; each person uses their own provider credits.
 

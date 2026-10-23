@@ -5,6 +5,21 @@ const selectedMethod=()=>methods.find(m=>m.id===$('method').value);
 const hasPendingKeys=()=>!!($('fal-key').value.trim()||$('kie-key').value.trim());
 const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);};
 const fail=e=>status(e.message.replace(/^Error invoking remote method '[^']+': Error: /,''),true);
+function renderFailure(e){
+  fail(e);$('result-status').textContent=e.canResume?'CONNECTION INTERRUPTED':result?'PREVIOUS RESULT':'JOB STOPPED';
+  if(e.canResume)offerReconnect(e.jobId,e.requestId);
+  else $('reconnect-render')?.remove();
+}
+function offerReconnect(id,requestId){
+  $('reconnect-render')?.remove();
+  const button=document.createElement('button');button.id='reconnect-render';button.textContent='Reconnect to render';
+  button.onclick=async()=>{
+    button.disabled=true;setBusy(true);status('Reconnecting to the existing render. No new generation request...');
+    try{receiveResult(await window.studio.reconnect(id,requestId));status('Existing result restored. No new generation requested.');button.remove();}
+    catch(e){renderFailure(e);if(!e.canResume)button.remove();}finally{button.disabled=false;setBusy(false);}
+  };
+  $('history-actions').append(button);
+}
 function readiness(){
   const m=selectedMethod(),locked=busy||importing;
   const hasKey=m&&(m.provider==='local'||keyReady[m.provider]||$(`${m.provider}-key`).value.trim());
@@ -69,6 +84,7 @@ function setBusy(value){
   busy=value;
   document.querySelectorAll('.settings input,.settings select,.settings textarea,.settings button,.credentials input').forEach(e=>e.disabled=value);
   $('latest-result').disabled=value;$('cancel').disabled=false;$('cancel').hidden=!value;
+  if($('reconnect-render'))$('reconnect-render').disabled=value;
   $('generate').textContent=value?'Creating transition...':'Create transition';readiness();
 }
 function showResult(){
@@ -81,6 +97,7 @@ function showResult(){
   $('preview').setAttribute('aria-pressed',String(!full));$('full').setAttribute('aria-pressed',String(full));
 }
 function receiveResult(r){
+  $('reconnect-render')?.remove();
   result=r;reviewMode='preview';$('comparison').value='transition';$('empty').hidden=true;$('result').hidden=false;$('anchors').hidden=false;$('anchor-a').src=r.frames[0];$('anchor-b').src=r.frames[1];
   for(const id of ['preview','full','export','reveal','comparison'])$(id).disabled=false;
   showResult();$('result-status').textContent='READY TO REVIEW';
@@ -88,7 +105,7 @@ function receiveResult(r){
 $('method').onchange=methodChange;
 $('latest-result').onclick=async()=>{
   setBusy(true);status('Opening your latest result and preparing its comparison...');
-  try{receiveResult(await window.studio.latestResult());status('Previous result loaded. No new AI generation was requested.');}catch(e){fail(e);}finally{setBusy(false);}
+  try{receiveResult(await window.studio.latestResult());status('Previous result loaded. No new AI generation was requested.');}catch(e){renderFailure(e);}finally{setBusy(false);}
 };
 $('generate').onclick=async()=>{
   if(!clips.a||!clips.b||busy||importing)return;
@@ -97,7 +114,7 @@ $('generate').onclick=async()=>{
     await applyKeys();
     const r=await window.studio.process({a:clips.a.id,b:clips.b.id,method:$('method').value,duration:Number($('duration').value),aEnd:Number($('a-end').value),bStart:Number($('b-start').value),fps:Number($('fps').value),prompt:$('prompt').value,mute:$('mute').checked});
     receiveResult(r);status('Complete. Review both joins before exporting.');
-  }catch(e){fail(e);$('result-status').textContent=result?'PREVIOUS RESULT':'JOB STOPPED';}finally{setBusy(false);}
+  }catch(e){renderFailure(e);}finally{setBusy(false);}
 };
 $('cancel').onclick=()=>{window.studio.cancel().catch(fail);$('cancel').disabled=true;status('Cancelling server processing... Cloud charges may still apply.');};
 $('comparison').onchange=showResult;
@@ -118,10 +135,7 @@ window.studio.init().then(data=>{
   }
   $('prompt').value=data.prompt;keyStatus(data.keys);methodChange();
   if(data.activeJob&&!data.activeBatch){
-    status('Your previous render is still running. Use Resume render to reconnect.');
-    const resume=document.createElement('button');resume.textContent='Resume render';
-    resume.onclick=async()=>{resume.disabled=true;setBusy(true);try{receiveResult(await window.studio.resume(data.activeJob));status('Result restored.');}catch(e){fail(e);}finally{setBusy(false);resume.remove();}};
-    $('history-actions').append(resume);
+    status('Your previous render is still running. Use Reconnect to render.');offerReconnect(data.activeJob);
   }
 }).catch(fail);
 readiness();

@@ -5,7 +5,8 @@ const {createFalClient}=require('@fal-ai/client');
 const {falInput}=require('./models');
 function providerError(stage,error,key='') {
   const detail=error.body?.detail;
-  const message=typeof detail==='string'?detail:typeof error.body?.message==='string'?error.body.message:error.message||'Provider request failed';
+  const validation=Array.isArray(detail)?detail.map(item=>`${Array.isArray(item.loc)?item.loc.join('.'):'input'}: ${item.msg||'invalid value'}`).join('; '):null;
+  const message=typeof detail==='string'?detail:validation|| (typeof error.body?.message==='string'?error.body.message:error instanceof SyntaxError?'Provider returned an empty or invalid JSON response; its service may be temporarily unavailable.':error.message||'Provider request failed');
   let safe=message;
   if(key)for(const part of [key,...key.split(':')].filter(p=>p.length>=6))safe=safe.split(part).join('[redacted]');
   return new Error(`${stage}${error.status?` (HTTP ${error.status})`:''}: ${safe.slice(0,1200)}`);

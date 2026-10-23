@@ -2,13 +2,37 @@
   let token,activeJob,progress=()=>{},hosted=false,maxUploadBytes=512*1024*1024;
   let sessionRequest;
   const results=new Map();
+  const phase=route=>route.startsWith('/api/jobs/')?'Checking render progress':route.includes('process')?'Starting render':route.includes('upload')?'Uploading video':route.includes('keys')?'Updating credentials':'Contacting app server';
+  function connectionError(route,httpStatus,detail){return Object.assign(new Error(`${phase(route)}: ${detail}${httpStatus?` (HTTP ${httpStatus})`:''}. The app server or its connection may have been interrupted. This response does not identify an API-key problem. Check Render logs if it repeats.`),{connection:true,httpStatus});}
+  async function decode(response,route){
+    let raw;
+    try{raw=await response.text();}catch{throw connectionError(route,response.status,'response was interrupted');}
+    let data;
+    try{data=JSON.parse(raw);}catch{throw connectionError(route,response.status,raw.trim()?'server returned an incomplete or non-JSON response':'server returned an empty response');}
+    if(!data||typeof data!=='object'||Array.isArray(data))throw connectionError(route,response.status,'server returned an invalid response');
+    if(!response.ok)throw Object.assign(new Error(data.error||`Request failed (HTTP ${response.status})`),{status:response.status});
+    return data;
+  }
+  async function request(route,options={}){
+    // Retry only reads: replaying a submission could start another paid job.
+    const retries=(!options.method||options.method==='GET')?2:0;
+    for(let attempt=0;;attempt++){
+      try{
+        let response;try{response=await fetch(route,options);}catch(e){if(e.name==='AbortError')throw e;throw connectionError(route,null,'network request failed');}
+        return await decode(response,route);
+      }catch(e){
+        if(attempt>=retries||(!e.connection&&![502,503,504].includes(e.status)))throw e;
+        progress(`${phase(route)}: connection interrupted; reconnecting (${attempt+1}/${retries}). No new generation is being submitted.`);
+        await new Promise(resolve=>setTimeout(resolve,1000*(attempt+1)));
+      }
+    }
+  }
   async function api(route,method='GET',body){
     if(!token){
       if(location.protocol==='file:')throw new Error('Launch Start Web App.vbs (Windows bundle) or npm start. This HTML page needs its included local processing server.');
-      sessionRequest ||= fetch('/api/session').then(async r=>{const data=await r.json();if(!r.ok)throw new Error(data.error||'Could not open session');return data.token;}).catch(e=>{sessionRequest=null;throw e;});token=await sessionRequest;
+      sessionRequest ||= request('/api/session').then(data=>data.token).catch(e=>{sessionRequest=null;throw e;});token=await sessionRequest;
     }
-    const response=await fetch(route,{method,headers:{'X-Studio-Token':token,...(body!==undefined?{'Content-Type':'application/json'}:{})},body:body===undefined?undefined:JSON.stringify(body)});
-    const data=await response.json();if(!response.ok)throw Object.assign(new Error(data.error||`Request failed (${response.status})`),{status:response.status});return data;
+    return request(route,{method,headers:{'X-Studio-Token':token,...(body!==undefined?{'Content-Type':'application/json'}:{})},body:body===undefined?undefined:JSON.stringify(body)});
   }
   function pick(){return new Promise((resolve,reject)=>{
     const input=document.createElement('input');input.type='file';input.accept='video/*,.mkv,.avi,.mov';
@@ -22,13 +46,15 @@
         const xhr=new XMLHttpRequest();xhr.open('POST',`/api/upload?name=${encodeURIComponent(file.name)}`);xhr.setRequestHeader('X-Studio-Token',token);
         xhr.upload.onprogress=e=>{if(e.lengthComputable)progress(`Importing ${file.name}: ${Math.round(100*e.loaded/e.total)}%`);};
         xhr.onerror=()=>reject(new Error('Import failed. Check that the server is still running.'));
-        xhr.onload=()=>{try{const data=JSON.parse(xhr.responseText);if(xhr.status!==200)throw new Error(data.error);progress('Video imported.');resolve(data);}catch(e){reject(e);}};
+        xhr.onload=async()=>{try{const data=await decode({status:xhr.status,ok:xhr.status===200,text:async()=>xhr.responseText},'/api/upload');progress('Video imported.');resolve(data);}catch(e){reject(e);}};
         xhr.send(file);
       }catch(e){reject(e);}
     };input.click();
   });}
   async function run(route,body={}){
-    const started=await api(route,'POST',body);return poll(started.id);
+    const requestId=crypto.randomUUID();let started;
+    try{started=await api(route,'POST',{...body,requestId});}catch(e){if(e.connection||[502,503,504].includes(e.status)){e.canResume=true;e.requestId=requestId;e.message+=' Submission was not retried. Use Reconnect to render to check whether the server accepted it.';}throw e;}
+    return poll(started.id);
   }
   async function poll(id){
     activeJob=id;let seen=0;
@@ -40,7 +66,11 @@
         if(job.state==='complete'){results.set(job.result.id,job.result);return job.result;}
         await new Promise(resolve=>setTimeout(resolve,700));
       }
-    }catch(e){throw new Error(`${e.message}${e instanceof TypeError?' The server may have restarted. Submitted cloud work may still be running.':''}`);}
+    }catch(e){
+      if(e.connection||[502,503,504].includes(e.status)){e.jobId=id;e.canResume=true;e.message+=' The existing render may still be running. Use Reconnect to render; do not create another paid job.';}
+      if([403,404].includes(e.status))e.message+=' The previous server session/job is unavailable. If the server restarted, check your provider history before generating again.';
+      throw e;
+    }
     finally{activeJob=null;}
   }
   function download(url){const a=document.createElement('a');a.href=`${url}?download=1`;a.download='';document.body.append(a);a.click();a.remove();}
@@ -49,8 +79,13 @@
     batchUpload:async(file,rowId,slot,signal)=>{
       await api('/api/init');
       if(file.size>maxUploadBytes)throw Object.assign(new Error('Video exceeds the 512 MB input limit.'),{status:400});
-      const response=await fetch(`/api/batch/upload?rowId=${encodeURIComponent(rowId)}&slot=${slot}&name=${encodeURIComponent(file.name)}`,{method:'POST',headers:{'X-Studio-Token':token},body:file,signal});
-      const data=await response.json();if(!response.ok)throw Object.assign(new Error(data.error),{status:response.status});return data;
+      return request(`/api/batch/upload?rowId=${encodeURIComponent(rowId)}&slot=${slot}&name=${encodeURIComponent(file.name)}`,{method:'POST',headers:{'X-Studio-Token':token},body:file,signal});
+    },
+    reconnect:async(id,requestId)=>{
+      if(id)return poll(id);
+      if(!requestId)throw new Error('Missing render reference. Refresh to check your server session.');
+      try{const job=await api(`/api/request-jobs/${encodeURIComponent(requestId)}`);return await poll(job.id);}
+      catch(e){if(e.connection){e.canResume=true;e.requestId=requestId;}throw e;}
     },
     init:async()=>{const data=await api('/api/init');hosted=data.hosted;maxUploadBytes=data.maxUploadBytes;document.getElementById('app-mode').textContent=hosted?'TEAM WEB APP':'LOCAL WEB APP';document.getElementById('shutdown').hidden=hosted;return data;},pick,resume:poll,
     setKeys:value=>api('/api/keys','POST',value),forgetKeys:()=>api('/api/keys','DELETE'),

@@ -15,10 +15,26 @@ function run(bin,args,signal) {
     let out='',err='';
     p.stdout.on('data',d=>out+=d); p.stderr.on('data',d=>err=(err+d).slice(-8000));
     const abort=()=>p.kill(); signal?.addEventListener('abort',abort,{once:true});
-    p.on('error',reject); p.on('close',code=>{signal?.removeEventListener('abort',abort); if(signal?.aborted) reject(new Error('Cancelled')); else if(code) reject(new Error(`Video processing failed: ${err.slice(-3000)}`)); else resolve(out);});
+    p.on('error',reject); p.on('close',(code,killedBy)=>{
+      signal?.removeEventListener('abort',abort);
+      if(signal?.aborted)reject(new Error('Cancelled'));
+      else if(killedBy||code===null)reject(new Error(`Video processing was terminated${killedBy?` by ${killedBy}`:''}. Check Render logs for a memory limit or server restart. ${err.slice(-1500)}`));
+      else if(code!==0)reject(new Error(`Video processing failed (exit ${code}): ${err.slice(-3000)}`));
+      else resolve(out);
+    });
   });
 }
-const ff=(args,signal)=>run(ffmpeg,['-hide_banner','-loglevel','error','-y',...args],signal);
+const ff=(args,signal)=>{
+  const configured=process.env.FFMPEG_THREADS;
+  if(configured){
+    const count=Number(configured);if(!Number.isInteger(count)||count<1||count>16)throw new Error('FFMPEG_THREADS must be an integer from 1 to 16.');
+    // Codec thread limits apply to the next input/output; filters have separate pools.
+    const bounded=[];for(const arg of args){if(arg==='-i')bounded.push('-threads',configured);bounded.push(arg);}
+    bounded.splice(bounded.length-1,0,'-threads',configured);
+    args=['-filter_threads',configured,'-filter_complex_threads',configured,...bounded];
+  }
+  return run(ffmpeg,['-hide_banner','-loglevel','error','-y',...args],signal);
+};
 async function extractBoundary(input,output,last,signal) {
   // Seeking to duration - 1/fps can land just AFTER the final presentation
   // timestamp because MP4 duration is rounded. FFmpeg then succeeds with no PNG.
