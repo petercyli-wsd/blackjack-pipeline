@@ -39,6 +39,8 @@
   function mode(batch){if(running)return;document.body.classList.toggle('batch-mode',batch);$('batch-panel').hidden=!batch;$('mode-batch').setAttribute('aria-pressed',String(batch));$('mode-single').setAttribute('aria-pressed',String(!batch));}
   $('mode-single').onclick=()=>mode(false);$('mode-batch').onclick=()=>mode(true);
   function render(){
+    $('batch-csv').hidden=!!queue;
+    $('batch-csv-info').textContent=queue?`Loaded: ${queue.csvName||'CSV from saved checkpoint'} (${queue.rows.length} ${queue.rows.length===1?'row':'rows'}). To replace it, use Clear batch checkpoint below.`:'';
     for(const id of ids)$(id).disabled=running||editing||(!available&&!id.startsWith('mode-'));
     $('batch-download').disabled=running||editing||!buffered.length;$('batch-ack').disabled=running||editing||!buffered.length||!downloaded;
     $('batch-start').disabled=running||editing||!available||!queue;$('batch-output-folder').disabled=running||editing||$('batch-destination').value!=='folder'||!window.showDirectoryPicker;
@@ -86,13 +88,14 @@
     $('batch-source-info').textContent=`${files.size} files available locally from ${$('batch-folder').files[0]?.webkitRelativePath.split('/')[0]||'selected folder'}. Only the current row's two videos upload.`;
   };
   $('batch-csv').onchange=async()=>{
+    const previousQueue=queue;
     try{
       if(queue)throw new Error('Clear the existing batch checkpoint before importing a new CSV.');
       const file=$('batch-csv').files[0];if(!file)return;if(file.size>20*1048576)throw new Error('CSV limit: 20 MB.');
       const records=BatchFormat.parseCSV(await file.text());
-      queue={id:crypto.randomUUID(),created:new Date().toISOString(),part:1,inputRoot:$('batch-input-root').value,outputRoot:$('batch-output-root').value,rows:BatchFormat.prepare(records,$('batch-input-root').value,$('batch-output-root').value).map((r,i)=>({...r,id:crypto.randomUUID(),fields:records[i]}))};
+      queue={id:crypto.randomUUID(),csvName:file.name,created:new Date().toISOString(),part:1,inputRoot:$('batch-input-root').value,outputRoot:$('batch-output-root').value,rows:BatchFormat.prepare(records,$('batch-input-root').value,$('batch-output-root').value).map((r,i)=>({...r,id:crypto.randomUUID(),fields:records[i]}))};
       if(files.size)match();await checkpoint({allRows:true});render();message('CSV loaded. Validate file matching, choose the method and destination, then start.');
-    }catch(e){message(e.message,true);}finally{$('batch-csv').value='';}
+    }catch(e){queue=previousQueue;message(e.message,true);}finally{$('batch-csv').value='';render();}
   };
   $('batch-validate').onclick=async()=>{try{match();await checkpoint({allRows:true});message('Validation complete. Invalid rows will be skipped; review their errors below.');}catch(e){message(e.message,true);}};
   $('batch-template').onclick=()=>download(new Blob(['first_half,second_half,output\r\n"table-01/first.mp4","table-01/second.mp4","table-01/combined.mp4"\r\n'],{type:'text/csv'}),'batch-example.csv');

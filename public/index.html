@@ -72,7 +72,7 @@
       <details open><summary>1. Match your local files</summary>
         <p class="help">CSV columns: <code>first_half,second_half,output</code>. Use paths relative to the selected source folder, and an output name ending in .mp4. Absolute paths need the matching root below. Nothing uploads until you start.</p>
         <div class="fields"><label>Source root in CSV (absolute paths only)<input id="batch-input-root" placeholder="C:\Videos or /home/me/videos" spellcheck="false"></label><label>Output root in CSV (absolute paths only)<input id="batch-output-root" placeholder="C:\Results or /home/me/results" spellcheck="false"></label></div>
-        <div class="fields"><label>Select source folder<input id="batch-folder" type="file" webkitdirectory multiple></label><label>Upload CSV<input id="batch-csv" type="file" accept=".csv,text/csv"></label></div>
+        <div class="fields"><label>Select source folder<input id="batch-folder" type="file" webkitdirectory multiple></label><div><label for="batch-csv">Upload CSV</label><input id="batch-csv" type="file" accept=".csv,text/csv" aria-describedby="batch-csv-info"><p class="help" id="batch-csv-info" role="status" aria-live="polite"></p></div></div>
         <p class="help" id="batch-source-info">Select the common parent folder containing both halves.</p>
         <div class="actions"><button id="batch-template" class="quiet">Download example CSV</button><button id="batch-validate">Validate / match files</button></div>
       </details>

@@ -94,6 +94,7 @@ dialog a{display:block;color:var(--mint);margin:15px 0}
 .mode-tabs{margin:22px 0 0}.batch-mode #single-inputs,.batch-mode .review,.batch-mode .generate-actions,.batch-mode #generate-hint{display:none}
 .batch-panel details{margin-top:20px}.batch-panel input[type=file]{height:auto;min-height:44px;padding:8px;font-size:12px}
 .batch-panel input::file-selector-button{border:0;border-radius:4px;padding:7px;margin-right:8px;background:#344b64;color:#ecf4ff;cursor:pointer}
+#batch-csv-info{overflow-wrap:anywhere;color:var(--mint)}#batch-csv-info:empty{display:none}
 .batch-panel .actions{gap:8px;margin-top:12px}.batch-metrics{white-space:pre-line;margin:22px 0 12px;color:var(--mint);line-height:1.8;font-size:13px}
 #batch-status{padding:12px;background:#1d2e31;border-radius:7px;line-height:1.7;overflow-wrap:anywhere}#batch-status.error{background:#362a2d;color:#ffb6ae}
 #batch-progress{width:100%;height:12px;accent-color:var(--mint)}.batch-table-wrap{max-height:420px;overflow:auto;margin-top:18px}

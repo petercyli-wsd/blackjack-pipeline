@@ -48,10 +48,31 @@ async function browser(env,{folder}={}){
   const selectFiles=()=>{
     Object.defineProperty($('batch-folder'),'files',{configurable:true,value:['a.mp4','b.mp4'].map(name=>({name,size:10,lastModified:1,webkitRelativePath:'videos/'+name}))});$('batch-folder').onchange();
   };
-  const load=async csv=>{selectFiles();Object.defineProperty($('batch-csv'),'files',{configurable:true,value:[{size:csv.length,text:async()=>csv}]});await $('batch-csv').onchange();};
+  const load=async(csv,name='pairs.csv')=>{selectFiles();Object.defineProperty($('batch-csv'),'files',{configurable:true,value:[{name,size:csv.length,text:async()=>csv}]});await $('batch-csv').onchange();};
   const state=async()=>new Promise((resolve,reject)=>{const request=env.indexedDB.open('dealer-transition-batches',1);request.onsuccess=()=>{const db=request.result,tx=db.transaction(['meta','rows']),r=tx.objectStore('meta').get('queue'),rows=tx.objectStore('rows').getAll();tx.oncomplete=()=>{db.close();resolve(r.result?{...r.result,rows:rows.result.sort((a,b)=>a.number-b.number)}:null);};tx.onerror=()=>reject(tx.error);};});
   return {w,$,load,selectFiles,state,close:()=>w.close()};
 }
+
+test('CSV filename and row count survive reload; clearing and invalid imports show the picker again',async()=>{
+  const env=environment();let b=await browser(env);
+  try{
+    await b.load('a.mp4,b.mp4,out.mp4','dealer-pairs.csv');
+    assert.equal(b.$('batch-csv').hidden,true);
+    assert.match(b.$('batch-csv-info').textContent,/Loaded: dealer-pairs\.csv \(1 row\)/);
+    assert.equal((await b.state()).csvName,'dealer-pairs.csv');
+    b.close();b=await browser(env);
+    assert.equal(b.$('batch-csv').hidden,true);
+    assert.match(b.$('batch-csv-info').textContent,/dealer-pairs\.csv \(1 row\)/);
+    await b.$('batch-reset').onclick();
+    assert.equal(b.$('batch-csv').hidden,false);assert.equal(b.$('batch-csv-info').textContent,'');
+    await b.load('"unterminated','bad.csv');
+    assert.equal(b.$('batch-csv').hidden,false);assert.equal(b.$('batch-csv-info').textContent,'');
+    assert.match(b.$('batch-status').textContent,/Unclosed quoted field/);assert.equal(await b.state(),null);
+    await b.load('a.mp4,b.mp4,first.mp4\na.mp4,b.mp4,second.mp4','replacement.csv');
+    assert.match(b.$('batch-csv-info').textContent,/replacement\.csv \(2 rows\)/);
+    assert.equal(env.calls,0);
+  }finally{b.close();}
+});
 
 test('browser batch pauses at 20 ZIP files, restores across reload, acknowledges parts and never repeats saved rows',async()=>{
   const env=environment();let b=await browser(env);
