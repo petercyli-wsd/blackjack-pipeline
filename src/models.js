@@ -8,7 +8,16 @@ const METHODS = [
   {id:'blend', name:'Linear frame blend · local', provider:'local', min:0.1, max:3, defaultDuration:0.3, help:'Pixel crossfade between the two boundary frames. Predictable baseline; moving features appear doubled.'},
   {id:'dissolve', name:'Overlapping clip dissolve · local', provider:'local', min:0.1, max:3, defaultDuration:0.3, help:'Crossfades moving footage and audio. Overlaps the end of A and start of B, shortening the combined duration.'}
 ];
-const DEFAULT_PROMPT = 'Locked-off camera. The same casino dealer makes one small, natural, continuous movement from the starting pose to the ending pose. Preserve identity, face, clothing, table, lighting and background. Keep the exact cards, chips, markings and objects consistent. Natural hands and fingers. No cuts, camera movement, added objects or extra actions.';
+const DEFAULT_PROMPT = [
+  'One continuous photorealistic shot from a fixed camera, matching the supplied first and last frames. Preserve the same dealer, face, clothing, table layout, lighting and background.',
+  'Make only the minimum natural hand and body motion needed to reach the ending pose; no extra dealing, collecting, shuffling, gestures or camera movement.',
+  'Treat every card and chip as the same persistent physical object throughout. Cards resting on the table stay fixed unless their movement is required by the ending frame.',
+  "Preserve each card's size, thickness, rectangular shape, back design and visible rank/suit. Do not flip cards unless the ending frame requires it; required flips use continuous physical rotation.",
+  "A moved card follows one continuous physical path under the hand's control, with consistent grip, contact, perspective and shadow. When fingers cover a card, it remains behind them and reappears intact as the hand moves away.",
+  'Cards do not vanish, fade, dissolve, duplicate, merge, change identity or teleport. Maintain coherent fingers and wrists without hands passing through cards or the table.',
+  'Match the final card positions and hand pose exactly without a last-frame snap. If an object is only visible at one boundary, account for it through continuous physically plausible movement or occlusion; never make it appear or disappear by fading.'
+].join(' ');
+
 function getMethod(id) { const m = METHODS.find(m=>m.id===id); if(!m) throw new Error('Unknown interpolation method'); return m; }
 const {parse:frameRate}=require('../public/frame-rate');
 function validateOptions(o) {

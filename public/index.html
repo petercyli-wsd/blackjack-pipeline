@@ -60,7 +60,7 @@
       <div class="fields"><label>Transition (seconds)<input type="number" id="duration" value="0.4" step="0.1"></label><label>Output frame rate (fps)<input id="fps" type="text" value="source" list="fps-presets" aria-describedby="fps-help" required><datalist id="fps-presets"><option value="source" label="Match clip A"><option value="24000/1001" label="23.976023... fps"><option value="24"><option value="25"><option value="30000/1001" label="29.970030... fps"><option value="30"><option value="50"><option value="60000/1001" label="59.940060... fps"><option value="60"></datalist></label></div>
       <p class="help" id="fps-help">Use source to match clip A exactly, a fraction such as 24000/1001, or a decimal such as 23.976 (up to 6 decimal places; 1-60 fps). All exports use this rate. Transition duration rounds to whole frames.</p>
       <p class="help" id="timing"></p>
-      <label id="prompt-wrap">Movement instructions<textarea id="prompt" rows="5" maxlength="2000"></textarea></label>
+      <div id="prompt-wrap"><label>Movement instructions<textarea id="prompt" rows="7" maxlength="2000"></textarea></label><button id="restore-prompt" class="quiet">Restore card-preserving prompt</button><p class="help">Describe which hand moves which card, and where it ends. Keep still cards fixed. This prompt aims to reduce continuity errors; it cannot guarantee realism. Inspect both joins and every card. For a small pose gap, compare FILM/RIFE.</p></div>
       <label class="check"><input type="checkbox" id="mute"> Mute all output audio</label>
       <details><summary>Audio &amp; output details</summary><p class="help">Source audio is kept with short fades around silent bridges. Dissolves crossfade audio. Output fits clip A, up to 1920 px wide.</p></details>
       <div class="actions generate-actions"><button id="generate" class="primary" disabled>Create transition</button><button id="cancel" hidden>Cancel</button></div>
@@ -79,17 +79,18 @@
       <details open><summary>2. Choose where results go</summary>
         <label>Output destination<select id="batch-destination"><option value="zip">ZIP parts (all modern browsers)</option><option value="folder">Save directly to a folder (supported browsers)</option></select></label>
         <div class="actions"><button id="batch-output-folder">Choose output folder</button><span id="batch-destination-info" class="help">ZIPs keep relative output folders and filenames.</span></div>
-        <p class="help">Folder mode streams each finished MP4 to disk. ZIP mode checkpoints results in this browser and pauses after 20 files or 250 MB. Download and confirm each part to continue. Existing files are never overwritten.</p>
+      <p class="help">For continuous saving, choose folder mode: each finished MP4 goes directly to disk. ZIP mode pauses after 20 files or 250 MB; download and confirm each part, or explicitly discard it to continue. Existing files are never overwritten.</p>
       </details>
-      <details><summary>3. Optional planning estimates</summary>
-        <div class="fields"><label>Estimated provider cost per row<input id="batch-unit-cost" type="number" min="0" step="any" placeholder="Optional, from your provider"></label><label>Cost unit<select id="batch-cost-unit"><option>USD</option><option>credits</option></select></label></div>
-        <p class="help">A planning estimate you enter, not a live quote or spending limit. Local methods cost 0 provider credits. Cloud prices depend on your model/account; fal compute time is not the bridge duration. Use a small pilot to estimate cost per row.</p>
+      <section class="batch-estimates" aria-labelledby="estimate-title"><h3 id="estimate-title">3. Plan your batch</h3><p id="batch-estimate" class="help" aria-live="polite">Load a CSV to see estimated time and provider cost before starting.</p><details><summary>Estimate assumptions &amp; overrides</summary><p id="batch-estimate-basis" class="help"></p>
+        <div class="fields"><label>Estimated provider cost per row<input id="batch-unit-cost" type="number" min="0" step="any" placeholder="Optional: override automatic estimate"></label><label>Cost unit<select id="batch-cost-unit"><option>USD</option><option>credits</option></select></label></div>
+        <p class="help">Rough planning ranges, not a quote or spending cap. Assumes short HD source clips and sequential processing. Upload speed, clip length, provider queues, retries and Render load can increase time or cost. Rates checked 24 October 2026; overrides use your chosen unit.</p>
       </details>
+      </section>
       <div class="batch-metrics" id="batch-metrics" aria-live="polite">No CSV loaded.</div>
       <progress id="batch-progress" value="0" max="1" aria-label="Batch progress"></progress>
-      <div class="actions"><button id="batch-start" class="primary">Start / resume batch</button><button id="batch-pause" disabled>Pause after this row</button><button id="batch-cancel" disabled>Cancel current row &amp; pause</button></div>
-      <div class="actions"><button id="batch-download" disabled>Download ZIP part</button><button id="batch-ack" disabled>ZIP saved: clear part</button><button id="batch-report">Download row report</button></div>
-      <div class="actions"><button id="batch-retry" class="quiet">Retry failed / interrupted rows</button><button id="batch-skip" class="quiet">Skip interrupted rows</button><button id="batch-reset" class="quiet">Clear batch checkpoint</button></div>
+      <div class="actions"><button id="batch-start" class="primary">Start / resume batch</button><button id="batch-pause" disabled>Pause after this row</button></div>
+      <div class="actions" id="batch-zip-actions" hidden><button id="batch-download" disabled>Download ZIP part</button><button id="batch-ack" disabled>ZIP saved: clear part</button><button id="batch-discard" class="quiet">Discard buffered outputs</button></div>
+      <details id="batch-more"><summary>More batch actions</summary><p class="help">Recovery, reports and clearing. Saved files on your computer are kept.</p><div class="actions"><button id="batch-report">Download row report</button><button id="batch-cancel" disabled>Cancel current row &amp; pause</button><button id="batch-retry" class="quiet">Retry failed / interrupted rows</button><button id="batch-skip" class="quiet">Skip interrupted rows</button><button id="batch-reset" class="quiet">Clear batch checkpoint</button></div></details>
       <p id="batch-status" role="status" aria-live="polite">Load a CSV to begin.</p>
       <p class="help">Keep this tab open and your computer awake while processing. Reloading restores the queue, but you must reselect source/destination folders. Keys are never checkpointed. A server restart can lose the current job; check its provider request before retrying. Free hosting is suitable for pilots, not guaranteed unattended bulk production.</p>
       <div class="batch-table-wrap"><table><thead><tr><th>Row</th><th>Output</th><th>Status / error</th></tr></thead><tbody id="batch-rows"></tbody></table></div>
@@ -97,7 +98,7 @@
     </article>
     <article class="card review">
       <div class="section-label"><h2><span class="step-number">3</span> Review &amp; export</h2><span id="result-status" class="badge">AWAITING CLIPS</span></div>
-      <div class="review-toolbar"><label>Compare versions<select id="comparison" disabled><option value="transition">With transition</option><option value="no-bridge">No bridge - direct cut</option></select></label><div id="history-actions" class="actions"><button id="latest-result" class="quiet">Open latest result</button></div></div>
+      <div class="review-toolbar"><label>Compare versions<select id="comparison" disabled><option value="transition">With transition</option><option value="no-bridge">No bridge - direct cut</option></select></label><div id="history-actions" class="actions"><button id="latest-result" class="quiet">Open latest result</button><button id="clear-results" class="quiet">Clear results</button></div></div>
       <p class="help">Compare the same cut with and without the bridge. No extra AI request.</p>
       <div class="preview-stage"><video id="result" controls loop hidden aria-label="Rendered result"></video><div class="empty" id="empty"><span aria-hidden="true">&#9654;</span>Your transition preview will appear here.<small>Check motion, identity and objects at both joins.</small></div></div>
       <div class="review-actions"><div class="actions playback-actions" role="group" aria-label="Playback length"><button id="preview" disabled>Join preview</button><button id="full" disabled>Full video</button></div><div class="actions export-actions"><button id="export" class="accent" disabled>Export MP4</button><button id="reveal" class="quiet" disabled>Download files</button></div></div>
@@ -109,6 +110,6 @@
   </section>
   <footer>Try FILM or RIFE for a small pose gap; Kling or Seedance for new motion. Inspect fingers, cards and chips at both joins.</footer>
 </main>
-<script src="browser.js"></script><script src="frame-rate.js"></script><script src="renderer.js"></script><script src="batch-format.js"></script><script src="batch-zip.js"></script><script src="batch.js"></script>
+<script src="browser.js"></script><script src="frame-rate.js"></script><script src="renderer.js"></script><script src="batch-format.js"></script><script src="batch-zip.js"></script><script src="batch-estimates.js"></script><script src="batch.js"></script>
 </body>
 </html>

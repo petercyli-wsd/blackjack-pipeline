@@ -62,12 +62,13 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
   async function endSession(s){
     if(s.ending)return s.ending;
     sessions.delete(s.id);s.keys={fal:'',kie:''};s.active?.controller.abort();s.upload?.controller.abort();
-    s.ending=(async()=>{await Promise.allSettled([s.active?.promise,s.upload?.promise]);await removeOwned(s.dir,instance);})();return s.ending;
+    s.ending=(async()=>{await Promise.allSettled([s.active?.promise,s.upload?.promise,s.clearing]);await removeOwned(s.dir,instance);})();return s.ending;
   }
   function credentials(s){if(Date.now()-s.keySetAt>keyTtlMs)s.keys={fal:'',kie:''};return {fal:!!s.keys.fal,kie:!!s.keys.kie};}
   function mediaURL(s,file){const id=randomUUID();s.media.set(id,file);return `/media/${id}`;}
   function register(s,r){return {id:randomUUID(),url:mediaURL(s,r.output),preview:r.preview?mediaURL(s,r.preview):null,noBridgeUrl:r.noBridge?mediaURL(s,r.noBridge):null,noBridgePreview:r.noBridgePreview?mediaURL(s,r.noBridgePreview):null,frames:r.frames.map(f=>mediaURL(s,f)),duration:r.duration,fps:r.fps,fpsRational:r.fpsRational,noBridgeDuration:r.noBridgeDuration,width:r.width,height:r.height};}
   function startJob(s,work,requestId){
+    if(s.clearing)throw new Error('Results are being cleared. Try again in a moment.');
     if(requestId!==undefined&&(typeof requestId!=='string'||!/^[-a-zA-Z0-9]{1,80}$/.test(requestId)))throw new Error('Invalid render request reference.');
     if(s.active)throw new Error('Your session already has a running job. Wait or cancel it first.');
     if(runningJobs>=maxConcurrentJobs)throw Object.assign(new Error('The team server is rendering another job. Waiting for a slot.'),{status:429});
@@ -89,6 +90,17 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
     for(const [id,file] of s.media)if(file.startsWith(dir+path.sep))s.media.delete(id);
     if(s.batch.jobId)s.jobs.delete(s.batch.jobId);s.batch=null;
   }
+  async function clearResults(s){
+    if(s.active||s.upload||s.clearing)throw Object.assign(new Error('Wait for the current render, upload or cleanup to finish before clearing results.'),{status:409});
+    const dir=path.join(s.dir,'renders');
+    s.clearing=(async()=>{
+      await removeOwned(dir,s.dir);
+      for(const [id,file] of s.media)if(file.startsWith(dir+path.sep))s.media.delete(id);
+      for(const id of s.jobs.keys())if(id!==s.batch?.jobId)s.jobs.delete(id);
+      s.renderCount=0;
+    })();
+    try{await s.clearing;}finally{s.clearing=null;}
+  }
   async function latest(s,signal,log){
     const root=path.join(s.dir,'renders'),entries=await fs.readdir(root,{withFileTypes:true}).catch(()=>[]);
     for(const entry of entries.filter(e=>e.isDirectory()).sort((a,b)=>b.name.localeCompare(a.name))){
@@ -100,7 +112,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
   }
   async function sweep(){
     await fs.utimes(instance,new Date(),new Date());
-    for(const s of sessions.values()){credentials(s);if(!s.active&&!s.upload&&Date.now()-s.lastSeen>sessionTtlMs)await endSession(s);}
+    for(const s of sessions.values()){credentials(s);if(!s.active&&!s.upload&&!s.clearing&&Date.now()-s.lastSeen>sessionTtlMs)await endSession(s);}
   }
   const cleanup=setInterval(()=>sweep().catch(()=>{}),60000);cleanup.unref();
   const server=http.createServer(async(req,res)=>{
@@ -117,7 +129,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
       const url=new URL(req.url,origin),route=url.pathname;
       const cookie=req.headers.cookie?.split(';').map(x=>x.trim()).find(x=>x.startsWith('studio_session='))?.slice(15);
       let s=sessions.get(cookie);
-      if(s&&!s.active&&!s.upload&&Date.now()-s.lastSeen>sessionTtlMs){await endSession(s);s=null;}
+      if(s&&!s.active&&!s.upload&&!s.clearing&&Date.now()-s.lastSeen>sessionTtlMs){await endSession(s);s=null;}
       if(s){s.lastSeen=Date.now();credentials(s);}
       if(route==='/api/session'&&req.method==='GET'){
         if(!s)s=newSession();res.setHeader('Set-Cookie',`studio_session=${s.id}; HttpOnly; SameSite=Strict; Path=/${hosted?'; Secure':''}`);return json(res,200,{token:s.token});
@@ -130,6 +142,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
           if(!job)return json(res,404,{error:'That render request was not found in your server session. It may not have reached the server, or the server may have restarted. Check provider history before submitting again.'});
           return json(res,200,{id:job.id});
         }
+        if(route==='/api/results'&&req.method==='DELETE'){await clearResults(s);return json(res,200,{cleared:true});}
         if(route==='/api/batch'&&req.method==='GET')return json(res,200,s.batch?{rowId:s.batch.rowId,jobId:s.batch.jobId,uploads:Object.fromEntries([...s.batch.uploads].map(([slot,{file,...info}])=>[slot,info]))}:{});
         if(route==='/api/batch/row'&&req.method==='POST'){
           const {rowId}=await body(req);if(typeof rowId!=='string'||!/^[-a-zA-Z0-9]{1,80}$/.test(rowId))throw new Error('Invalid batch row ID.');
@@ -180,7 +193,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
           const o=await body(req),method=validateOptions(o);
           if(!s.uploads.has(o.a)||!s.uploads.has(o.b))throw new Error('Upload both videos in your own session first.');
           if(s.upload)throw new Error('Wait for your upload to finish.');
-          if(s.renderCount>=5)throw new Error('Session render limit reached. Download your results and end this session to start fresh.');
+          if(s.renderCount>=5)throw new Error('Session render limit reached. Use Clear results in Review & export to discard old renders and free space. Download any results you want to keep first.');
           const key=s.keys[method.provider];if(method.provider!=='local'&&!key)throw new Error(`Enter your own ${method.provider} API key in Provider credentials first.`);
           const options={...o,a:s.uploads.get(o.a),b:s.uploads.get(o.b)},dir=path.join(s.dir,'renders',`${Date.now()}-${randomUUID().slice(0,8)}`);
           const started=startJob(s,(signal,log)=>renderVideo(options,{dir,key,signal,log}),o.requestId);s.renderCount++;return json(res,202,started);
@@ -200,7 +213,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
       if(route.startsWith('/media/')&&['GET','HEAD'].includes(req.method)){
         const file=s?.media.get(route.slice('/media/'.length));if(!file)return json(res,404,{error:'Media not found in your session'});return await sendFile(req,res,file,url.searchParams.get('download')==='1');
       }
-      const staticFiles={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/renderer.js':'renderer.js','/browser.js':'browser.js','/frame-rate.js':'frame-rate.js','/batch.js':'batch.js','/batch-format.js':'batch-format.js','/batch-zip.js':'batch-zip.js'};
+      const staticFiles={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/renderer.js':'renderer.js','/browser.js':'browser.js','/frame-rate.js':'frame-rate.js','/batch.js':'batch.js','/batch-estimates.js':'batch-estimates.js','/batch-format.js':'batch-format.js','/batch-zip.js':'batch-zip.js'};
       if(staticFiles[route]&&req.method==='GET'){
         const name=staticFiles[route],types={html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8'};
         res.writeHead(200,{'Content-Type':types[name.split('.').at(-1)],'Cache-Control':'no-store'});res.end(await fs.readFile(path.join(__dirname,'public',name)));return;

@@ -1,0 +1,25 @@
+(function(root){
+  // Budget assumptions, not measured benchmarks or live billing quotes.
+  const profiles={
+    film:{seconds:[30,120],cost:[0.005,0.05],basis:'FILM: speculative $0.005–$0.05 per row for a short HD bridge. This is a budget allowance, not a verified provider tariff; frame count and image size can change actual cost.'},
+    rife:{seconds:[20,90],cost:[0.003,0.03],basis:'RIFE: speculative $0.003–$0.03 per row for a short HD bridge. This is a budget allowance, not a verified provider tariff; frame count and image size can change actual cost.'},
+    'kling-fal':{seconds:[120,600],cost:[0.112,0.14],perSecond:true,basis:'Kling fal: $0.112–$0.14 per generated second, spanning fal’s published no-audio and pricing-table figures.'},
+    'kling-kie':{seconds:[120,600],cost:[0.09,0.09],perSecond:true,basis:'Kling KIE Pro, audio off: published $0.09 per generated second (18 credits). Discounts/taxes excluded.'},
+    seedance:{seconds:[120,900],cost:[0.34668,0.5778],perSecond:true,basis:'Seedance 720p: assumes 1280×720 at native 24 fps, $0.0214/1,000 tokens; about $0.46224/second with ±25% planning allowance for aspect ratio. Export FPS does not set provider billing FPS.'},
+    flow:{seconds:[30,300],cost:[0,0],basis:'Local motion interpolation: no provider charge; server runtime varies strongly with resolution and clip length.'},
+    blend:{seconds:[15,120],cost:[0,0],basis:'Local blend: no provider charge.'},
+    dissolve:{seconds:[15,120],cost:[0,0],basis:'Local dissolve: no provider charge.'}
+  };
+  function estimate({method,duration,rows,unitCost='',unit='USD',samples=[]}){
+    const p=profiles[method];if(!p||!Number.isFinite(duration)||duration<=0||!Number.isFinite(rows)||rows<0)return null;
+    const completed=samples.filter(n=>Number.isFinite(n)&&n>0).slice(-10);
+    const average=completed.reduce((a,b)=>a+b,0)/(completed.length||1);
+    const seconds=completed.length?[average*.75,average*1.5]:p.seconds.map(n=>n*(p.perSecond?Math.max(1,duration/5):Math.max(1,duration/.4)));
+    const local=['flow','blend','dissolve'].includes(method);
+    const manual=!local&&String(unitCost).trim()!==''&&Number.isFinite(Number(unitCost))&&Number(unitCost)>=0;
+    const cost=p.cost.map(n=>n*(p.perSecond?duration:1));
+    const perRow=manual?[Number(unitCost),Number(unitCost)]:cost;
+    return {time:seconds.map(n=>n*rows),cost:perRow.map(n=>n*rows),perRow,unit:manual?unit:'USD',measured:completed.length,basis:manual?'Your per-row cost override.':p.basis};
+  }
+  const api={estimate};if(typeof module==='object'&&module.exports)module.exports=api;else root.BatchEstimates=api;
+})(globalThis);

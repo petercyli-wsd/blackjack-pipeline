@@ -1,6 +1,6 @@
 ﻿const $=id=>document.getElementById(id);
 let methods=[],clips={},result=null,busy=false,importing=false,keyReady={fal:false,kie:false};
-let reviewMode='preview';
+let reviewMode='preview',defaultPrompt='';
 const selectedMethod=()=>methods.find(m=>m.id===$('method').value);
 const hasPendingKeys=()=>!!($('fal-key').value.trim()||$('kie-key').value.trim());
 const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);};
@@ -27,6 +27,7 @@ function readiness(){
   $('generate').disabled=!!locked||!clips.a||!clips.b||!hasKey||!$('fps').validity.valid;
   $('save-keys').disabled=!!locked||!hasPendingKeys();
   $('forget-keys').disabled=!!locked||(!keyReady.fal&&!keyReady.kie&&!hasPendingKeys());
+  $('clear-results').disabled=!!locked;
   for(const slot of ['a','b']){
     $(`pick-${slot}`).disabled=!!locked;
     $(slot==='a'?'a-end':'b-start').disabled=!!locked||!clips[slot];
@@ -105,6 +106,20 @@ function receiveResult(r){
 }
 $('method').onchange=methodChange;
 $('fps').addEventListener('input',readiness);
+$('restore-prompt').onclick=()=>{$('prompt').value=defaultPrompt;};
+$('clear-results').onclick=async()=>{
+  if(busy||importing||!confirm('Permanently discard all single-pair renders in this session without downloading? Source uploads, API keys and batch progress are kept.'))return;
+  setBusy(true);
+  try{
+    await window.studio.clearResults();result=null;reviewMode='preview';
+    $('result').pause();$('result').removeAttribute('src');$('result').load();$('result').hidden=true;
+    $('empty').hidden=false;$('anchors').hidden=true;
+    for(const id of ['anchor-a','anchor-b'])$(id).removeAttribute('src');
+    for(const id of ['preview','full','export','reveal','comparison'])$(id).disabled=true;
+    $('result-info').textContent='';$('log').textContent='';$('reconnect-render')?.remove();
+    $('result-status').textContent='RESULTS CLEARED';status('Old renders cleared. Choose a method and create another transition. Your source uploads and keys are kept.');
+  }catch(e){fail(e);}finally{setBusy(false);}
+};
 $('latest-result').onclick=async()=>{
   setBusy(true);status('Opening your latest result and preparing its comparison...');
   try{receiveResult(await window.studio.latestResult());status('Previous result loaded. No new AI generation was requested.');}catch(e){renderFailure(e);}finally{setBusy(false);}
@@ -136,7 +151,8 @@ window.studio.init().then(data=>{
     for(const m of methods.filter(filter)){const option=document.createElement('option');option.value=m.id;option.textContent=m.name;group.append(option);}
     $('method').append(group);
   }
-  $('prompt').value=data.prompt;keyStatus(data.keys);methodChange();
+  defaultPrompt=data.prompt;$('prompt').value=defaultPrompt;keyStatus(data.keys);methodChange();
+  window.dispatchEvent(new Event('studio:ready'));
   if(data.activeJob&&!data.activeBatch){
     status('Your previous render is still running. Use Reconnect to render.');offerReconnect(data.activeJob);
   }

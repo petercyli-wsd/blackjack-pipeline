@@ -91,6 +91,7 @@
     setKeys:value=>api('/api/keys','POST',value),forgetKeys:()=>api('/api/keys','DELETE'),
     process:options=>run('/api/process',options),latestResult:()=>run('/api/latest'),
     cancel:()=>api('/api/cancel','POST'),
+    clearResults:async()=>{await api('/api/results','DELETE');results.clear();},
     export:async(id,variant)=>{const r=results.get(id);if(!r)throw new Error('No rendered result');download(variant==='no-bridge'?r.noBridgeUrl:r.url);return 'your browser’s Downloads';},
     reveal:id=>{
       const r=results.get(id);if(!r)return;

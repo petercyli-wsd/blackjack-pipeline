@@ -15,8 +15,9 @@ function environment(){
     const route=new URL(url,'http://studio.test'),method=options.method||'GET',value=typeof options.body==='string'?JSON.parse(options.body):{};
     const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
     if(route.pathname==='/api/session')return json({token:'session-token'});
-    if(route.pathname==='/api/init')return json({methods:METHODS,prompt:DEFAULT_PROMPT,keys:{fal:true,kie:true},maxUploadBytes:512*1048576,hosted:true});
+    if(route.pathname==='/api/init'){if(env.initDelay)await delay(env.initDelay);return json({methods:METHODS,prompt:DEFAULT_PROMPT,keys:{fal:true,kie:true},maxUploadBytes:512*1048576,hosted:true});}
     if(route.pathname==='/api/keys')return json({fal:true,kie:true});
+    if(route.pathname==='/api/results'&&method==='DELETE'){if(env.clearError)return json({error:env.clearError},409);env.cleared=(env.cleared||0)+1;return json({cleared:true});}
     if(route.pathname==='/api/batch')return json(env.workspace||{});
     if(route.pathname==='/api/batch/row'){env.workspace={rowId:value.rowId,uploads:{},jobId:null};return json({rowId:value.rowId});}
     if(route.pathname==='/api/batch/upload'){env.workspace.uploads[route.searchParams.get('slot')]={duration:1};return json({duration:1});}
@@ -40,10 +41,11 @@ async function browser(env,{folder}={}){
   Object.assign(w,{indexedDB:env.indexedDB,fetch:env.fetch,Blob,TextEncoder,TextDecoder,structuredClone,confirm:()=>true,alert:()=>{}});
   w.navigator.locks={request:async(name,options,fn)=>{if(env.locked)return fn(null);env.locked=true;try{return await fn({name});}finally{env.locked=false;}}};
   w.URL.createObjectURL=blob=>{env.downloads.push(blob);return 'blob:test';};w.URL.revokeObjectURL=()=>{};w.HTMLAnchorElement.prototype.click=()=>{};
+  w.HTMLMediaElement.prototype.pause=()=>{};w.HTMLMediaElement.prototype.load=()=>{};
   if(folder)w.showDirectoryPicker=async()=>folder;
   // Avoid 1.5-second polling waits; preserve asynchronous ordering.
   const timeout=w.setTimeout.bind(w);w.setTimeout=(fn,ms,...args)=>timeout(fn,ms===1500||ms===5000?1:ms,...args);
-  for(const name of ['browser.js','frame-rate.js','renderer.js','batch-format.js','batch-zip.js','batch.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
+  for(const name of ['browser.js','frame-rate.js','renderer.js','batch-format.js','batch-zip.js','batch-estimates.js','batch.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
   await until(()=>$('method').options.length===METHODS.length&&!$('batch-csv').disabled).catch(e=>{throw new Error(`${e.message}: ${$('batch-status').textContent}; ${$('status').textContent}; methods=${$('method').options.length}`);});
   const selectFiles=()=>{
     Object.defineProperty($('batch-folder'),'files',{configurable:true,value:['a.mp4','b.mp4'].map(name=>({name,size:10,lastModified:1,webkitRelativePath:'videos/'+name}))});$('batch-folder').onchange();
@@ -52,6 +54,67 @@ async function browser(env,{folder}={}){
   const state=async()=>new Promise((resolve,reject)=>{const request=env.indexedDB.open('dealer-transition-batches',1);request.onsuccess=()=>{const db=request.result,tx=db.transaction(['meta','rows']),r=tx.objectStore('meta').get('queue'),rows=tx.objectStore('rows').getAll();tx.oncomplete=()=>{db.close();resolve(r.result?{...r.result,rows:rows.result.sort((a,b)=>a.number-b.number)}:null);};tx.onerror=()=>reject(tx.error);};});
   return {w,$,load,selectFiles,state,close:()=>w.close()};
 }
+
+test('batch estimates show before starting and respond to settings; single-result clearing and prompt restore work',async()=>{
+  const env=environment(),b=await browser(env);
+  try{
+    await b.load('a.mp4,b.mp4,out.mp4');
+    assert.match(b.$('batch-estimate').textContent,/provider cost \$/);assert.match(b.$('batch-estimate').textContent,/before starting/);assert.equal(env.calls,0);
+    b.$('method').value='seedance';b.$('method').dispatchEvent(new b.w.Event('change'));
+    assert.match(b.$('batch-estimate').textContent,/seedance, 4s/);
+    b.$('duration').value=8;b.$('duration').dispatchEvent(new b.w.Event('input'));
+    assert.match(b.$('batch-estimate').textContent,/seedance, 8s/);
+    b.$('prompt').value='custom';b.$('method').value='kling-fal';b.$('method').dispatchEvent(new b.w.Event('change'));assert.equal(b.$('prompt').value,'custom');
+    b.$('restore-prompt').onclick();assert.equal(b.$('prompt').value,DEFAULT_PROMPT);
+    assert.match(DEFAULT_PROMPT,/occlusion/);assert.ok(DEFAULT_PROMPT.length<2000);
+    b.w.studio.latestResult=async()=>({id:'prior',frames:['/media/start','/media/end'],url:'/media/full',preview:'/media/preview',noBridgeUrl:'/media/cut',noBridgePreview:'/media/cut-preview',duration:4,noBridgeDuration:1,width:1280,height:720});
+    await b.$('latest-result').onclick();assert.equal(b.$('result').hidden,false);assert.equal(b.$('export').disabled,false);
+    env.clearError='Wait for the current render to finish';await b.$('clear-results').onclick();assert.match(b.$('status').textContent,/Wait for the current render/);assert.equal(b.$('result').hidden,false);assert.equal(b.$('export').disabled,false);
+    delete env.clearError;
+    b.w.confirm=()=>false;await b.$('clear-results').onclick();assert.equal(env.cleared,undefined);
+    b.w.confirm=()=>true;await b.$('clear-results').onclick();assert.equal(env.cleared,1);
+    assert.equal(b.$('result-status').textContent,'RESULTS CLEARED');assert.ok(await b.state());
+    assert.equal(b.$('result').hasAttribute('src'),false);assert.equal(b.$('export').disabled,true);assert.equal(b.$('anchors').hidden,true);
+  }finally{b.close();}
+});
+
+test('unstarted checkpoint gets upfront estimates when server init arrives after browser storage',async()=>{
+  const env=environment();let b=await browser(env);
+  try{
+    await b.load('a.mp4,b.mp4,out.mp4');b.close();env.initDelay=150;b=await browser(env);
+    assert.match(b.$('batch-estimate').textContent,/Selected: film, 0.4s/);assert.match(b.$('batch-estimate').textContent,/provider cost \$/);assert.equal(env.calls,0);
+  }finally{b.close();}
+});
+
+test('discarding a ZIP part needs confirmation, survives reload and never reruns discarded rows',async()=>{
+  const env=environment();let b=await browser(env);
+  try{
+    await b.load(Array.from({length:21},(_,i)=>`a.mp4,b.mp4,${i}.mp4`).join('\n'));
+    await b.$('batch-start').onclick();assert.equal(env.calls,20);
+    assert.equal(b.$('batch-zip-actions').hidden,false);assert.equal(b.$('batch-more').open,false);
+    b.w.confirm=()=>false;await b.$('batch-discard').onclick();assert.equal((await b.state()).rows[0].state,'buffered');
+    b.w.confirm=()=>true;await b.$('batch-discard').onclick();
+    assert.equal(env.downloads.length,0);assert.equal(b.$('batch-zip-actions').hidden,true);
+    assert.equal((await b.state()).rows.filter(r=>r.state==='discarded').length,20);
+    b.close();b=await browser(env);b.selectFiles();await b.$('batch-start').onclick();
+    assert.equal(env.calls,21);assert.equal((await b.state()).rows.filter(r=>r.state==='discarded').length,20);
+    assert.equal((await b.state()).rows.at(-1).state,'buffered');
+  }finally{b.close();}
+});
+
+test('failed ZIP clear checkpoints keep buffered files and row states',async()=>{
+  const env=environment(),b=await browser(env),original=IDBObjectStore.prototype.delete,originalClear=IDBObjectStore.prototype.clear;
+  try{
+    await b.load('a.mp4,b.mp4,out.mp4');await b.$('batch-start').onclick();
+    IDBObjectStore.prototype.delete=function(...args){if(this.name==='outputs')throw new Error('Storage unavailable');return original.apply(this,args);};
+    await b.$('batch-discard').onclick();
+    assert.equal((await b.state()).rows[0].state,'buffered');assert.equal(b.$('batch-download').disabled,false);assert.match(b.$('batch-status').textContent,/Storage unavailable/);
+    await b.$('batch-download').onclick();await b.$('batch-ack').onclick();
+    assert.equal((await b.state()).rows[0].state,'buffered');assert.equal((await b.state()).part,1);assert.match(b.$('batch-metrics').textContent,/1 \/ 1 outputs saved or buffered/);
+    IDBObjectStore.prototype.clear=function(...args){if(this.name==='outputs')throw new Error('Storage unavailable');return originalClear.apply(this,args);};
+    await b.$('batch-reset').onclick();assert.ok(await b.state());assert.equal(b.$('batch-download').disabled,false);
+  }finally{IDBObjectStore.prototype.delete=original;IDBObjectStore.prototype.clear=originalClear;b.close();}
+});
 
 test('CSV filename and row count survive reload; clearing and invalid imports show the picker again',async()=>{
   const env=environment();let b=await browser(env);

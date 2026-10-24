@@ -3,12 +3,12 @@
   const $=id=>document.getElementById(id),api=window.studio.batchAPI,ui=window.studioUI;
   const pauseStates=['uploading','submitting','running','saving'];
   const retryStates=['failed','cancelled','uncertain'];
-  const terminal=['saved','buffered','failed','cancelled','invalid','skipped','uncertain'];
+  const terminal=['saved','buffered','failed','cancelled','invalid','skipped','discarded','uncertain'];
   const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   let queue=null,files=new Map(),foldedFiles=new Map(),destination=null,running=false,stopAfter=false,cancelled=false,uploadController=null,page=0,downloaded=false;
   let buffered=[],db,available=false,editing=false;
   const message=(text,error=false)=>{$('batch-status').textContent=text;$('batch-status').classList.toggle('error',error);};
-  const ids=['batch-csv','batch-folder','batch-input-root','batch-output-root','batch-destination','batch-output-folder','batch-validate','batch-start','batch-reset','batch-retry','batch-skip','batch-download','batch-ack','batch-unit-cost','batch-cost-unit','mode-single','mode-batch'];
+  const ids=['batch-csv','batch-folder','batch-input-root','batch-output-root','batch-destination','batch-output-folder','batch-validate','batch-start','batch-reset','batch-retry','batch-skip','batch-download','batch-ack','batch-discard','batch-unit-cost','batch-cost-unit','mode-single','mode-batch'];
   function lock(value){running=value;ui.lock(value);for(const id of ids)$(id).disabled=value;$('batch-pause').disabled=!value;$('batch-cancel').disabled=!value;render();}
   const storage=new Promise((resolve,reject)=>{
     const request=indexedDB.open('dealer-transition-batches',1);
@@ -40,19 +40,31 @@
   $('mode-single').onclick=()=>mode(false);$('mode-batch').onclick=()=>mode(true);
   function render(){
     $('batch-csv').hidden=!!queue;
-    $('batch-csv-info').textContent=queue?`Loaded: ${queue.csvName||'CSV from saved checkpoint'} (${queue.rows.length} ${queue.rows.length===1?'row':'rows'}). To replace it, use Clear batch checkpoint below.`:'';
+    $('batch-csv-info').textContent=queue?`Loaded: ${queue.csvName||'CSV from saved checkpoint'} (${queue.rows.length} ${queue.rows.length===1?'row':'rows'}). To replace it, open More batch actions → Clear batch checkpoint.`:'';
     for(const id of ids)$(id).disabled=running||editing||(!available&&!id.startsWith('mode-'));
     $('batch-download').disabled=running||editing||!buffered.length;$('batch-ack').disabled=running||editing||!buffered.length||!downloaded;
     $('batch-start').disabled=running||editing||!available||!queue;$('batch-output-folder').disabled=running||editing||$('batch-destination').value!=='folder'||!window.showDirectoryPicker;
     for(const id of ['batch-input-root','batch-output-root'])$(id).disabled=running||editing||!!queue?.settings;
-    if(!queue)return;
+    $('batch-pause').hidden=!running;$('batch-cancel').hidden=!running;
+    $('batch-zip-actions').hidden=!buffered.length;
+    $('batch-discard').disabled=running||editing||!buffered.length;
+    $('batch-output-folder').hidden=$('batch-destination').value!=='folder';
+    $('batch-retry').disabled=running||editing||!queue?.rows.some(r=>retryStates.includes(r.state));
+    $('batch-skip').disabled=running||editing||!queue?.rows.some(r=>['uncertain',...pauseStates].includes(r.state));
+    for(const id of ['batch-report','batch-reset'])$(id).disabled=running||editing||!queue;
+    if(!queue){$('batch-estimate').textContent='Load a CSV to see estimated time and provider cost before starting.';$('batch-estimate-basis').textContent='';return;}
     const counts={};for(const r of queue.rows)counts[r.state]=(counts[r.state]||0)+1;
-    const complete=(counts.saved||0)+(counts.buffered||0),pending=(counts.pending||0)+queue.rows.filter(r=>pauseStates.includes(r.state)).length;
-    const times=queue.rows.filter(r=>['saved','buffered'].includes(r.state)&&r.elapsed).slice(-10).map(r=>r.elapsed),average=times.reduce((a,b)=>a+b,0)/(times.length||1);
-    const method=queue.settings?.method||$('method').value,local=['blend','flow','dissolve'].includes(method),raw=$('batch-unit-cost').value,cost=Number(raw);
-    const estimate=local?'0 provider credits':raw!==''&&Number.isFinite(cost)&&cost>=0?`${(cost*pending).toFixed(2)} ${$('batch-cost-unit').value} estimated remaining (${cost}/row)`:'Provider cost unknown: enter a per-row pilot estimate above.';
-    const eta=times.length?`${Math.ceil(average*pending/60)} min remaining, based on last ${times.length} saved rows`:'Time estimate appears after the first saved row.';
-    $('batch-metrics').textContent=`${complete} / ${queue.rows.length} outputs saved or buffered · ${counts.pending||0} pending · ${(counts.invalid||0)+(counts.failed||0)+(counts.cancelled||0)+(counts.skipped||0)} skipped/failed · ${counts.uncertain||0} need review\n${eta}\n${estimate}\n${buffered.length} files / ${(buffered.reduce((sum,x)=>sum+x.blob.size,0)/1048576).toFixed(1)} MB buffered for ZIP part ${queue.part}${queue.settings?` · Locked method: ${method}`:''}`;
+    const complete=(counts.saved||0)+(counts.buffered||0);
+    const settings=queue.settings||ui.settings(),remaining=queue.rows.filter(r=>!['saved','buffered','skipped','discarded'].includes(r.state)).length;
+    const samples=queue.rows.filter(r=>['saved','buffered'].includes(r.state)).map(r=>r.elapsed);
+    const estimate=window.BatchEstimates.estimate({...settings,rows:remaining,unitCost:$('batch-unit-cost').value,unit:$('batch-cost-unit').value,samples});
+    if(estimate){
+      const time=seconds=>seconds<3600?`${Math.ceil(seconds/60)} min`:`${(seconds/3600).toFixed(1)} hr`;
+      const cost=value=>estimate.unit==='USD'?`$${value.toFixed(2)}`:`${value.toFixed(2)} ${estimate.unit}`;
+      $('batch-estimate').textContent=`${queue.settings?'Locked batch':'Selected'}: ${settings.method}, ${settings.duration}s bridge. For ${remaining} unfinished rows:\nApproximately ${time(estimate.time[0])} to ${time(estimate.time[1])}; provider cost ${cost(estimate.cost[0])} to ${cost(estimate.cost[1])}.\n${estimate.measured?'Time range based on recent completed rows.':'Speculative time range available before starting.'} Planning estimates, not a quote or spending cap; actual totals can fall outside these ranges.`;
+      $('batch-estimate-basis').textContent=estimate.basis+' Unfinished includes invalid/failed rows if you fix and retry them. Excludes past charges, retries, taxes and hosting charges. Time assumes continuous running; ZIP confirmations and sleep add delays.';
+    }else{$('batch-estimate').textContent='Choose a valid method and duration to see estimates.';$('batch-estimate-basis').textContent='';}
+    $('batch-metrics').textContent=`${complete} / ${queue.rows.length} outputs saved or buffered | ${counts.pending||0} pending | ${(counts.invalid||0)+(counts.failed||0)+(counts.cancelled||0)+(counts.skipped||0)} skipped/failed | ${counts.discarded||0} discarded | ${counts.uncertain||0} need review\n${buffered.length} files / ${(buffered.reduce((sum,x)=>sum+x.blob.size,0)/1048576).toFixed(1)} MB buffered for ZIP part ${queue.part}`;
     $('batch-progress').max=queue.rows.length;$('batch-progress').value=queue.rows.filter(r=>terminal.includes(r.state)).length;
     page=Math.max(0,Math.min(page,Math.ceil(queue.rows.length/50)-1));const start=page*50;
     $('batch-rows').replaceChildren();
@@ -103,6 +115,8 @@
   $('batch-output-folder').onclick=async()=>{try{destination=await window.showDirectoryPicker({mode:'readwrite',id:'studio-batch-output'});$('batch-destination-info').textContent=`Output folder: ${destination.name}`;}catch(e){if(e.name!=='AbortError')message(e.message,true);}};
   for(const id of ['batch-unit-cost','batch-cost-unit'])$(id).oninput=()=>{render();};
   $('method').addEventListener('change',render);
+  window.addEventListener('studio:ready',render);
+  for(const id of ['duration','fps'])$(id).addEventListener('input',render);
   function checkCancelled(){if(cancelled)throw Object.assign(new Error('Cancelled by you. Submitted cloud work may still be billed.'),{cancelled:true});}
   async function release(row){await api('/api/batch/release','POST',{rowId:row.attempt});}
   async function cleanPrevious(){
@@ -138,7 +152,7 @@
       const head=await fetch(row.result.url,{method:'HEAD'});if(!head.ok)throw new Error('Completed result is no longer on the server.');
       const size=Number(head.headers.get('content-length'));
       if(size>512*1048576)throw new Error('This output exceeds the 512 MB ZIP-file limit. Choose folder mode in Chrome/Edge to stream it to disk.');
-      if(buffered.length&&(buffered.length>=20||buffered.reduce((n,x)=>n+x.blob.size,0)+size>250*1048576))throw new Error('ZIP part is full. Download it, confirm ZIP saved, then resume this completed row.');
+      if(buffered.length&&(buffered.length>=20||buffered.reduce((n,x)=>n+x.blob.size,0)+size>250*1048576))throw new Error('ZIP part is full. Download it and confirm ZIP saved, or discard buffered outputs, then resume this completed row.');
       const response=await fetch(row.result.url);if(!response.ok)throw new Error('Result download failed. Resume to retry saving without generating again.');
       const blob=await response.blob();if(blob.size!==size)throw new Error('Incomplete result download. Resume to download it again.');
       const item={id:row.id,name:row.name,blob};row.state='buffered';row.part=queue.part;row.error='';row.elapsed=(Date.now()-row.started)/1000;
@@ -189,7 +203,7 @@
     if(!queue)throw new Error('Upload a CSV first.');
     if($('batch-destination').value==='folder'&&!destination)throw new Error('Choose an output folder first.');
     if(!files.size&&queue.rows.some(r=>r.state==='pending'||r.state==='uploading'))throw new Error('Select your source folder first.');
-    if(buffered.length>=20||buffered.reduce((n,x)=>n+x.blob.size,0)>=250*1048576)throw new Error('Download and confirm the current ZIP part before continuing.');
+    if(buffered.length>=20||buffered.reduce((n,x)=>n+x.blob.size,0)>=250*1048576)throw new Error('Save and confirm the current ZIP part, or choose Discard buffered outputs, before continuing.');
     stopAfter=false;cancelled=false;lock(true);
     try{
       await ui.applyKeys();
@@ -219,7 +233,7 @@
             row.state='failed';row.error=e.message;await checkpoint({row});await release(row);
           }else{row.error=e.message;await checkpoint({row});throw e;}
         }
-        render();if(buffered.length>=20||buffered.reduce((n,x)=>n+x.blob.size,0)>=250*1048576){message('ZIP part ready. Download it and confirm ZIP saved before resuming.');return;}
+        render();if(buffered.length>=20||buffered.reduce((n,x)=>n+x.blob.size,0)>=250*1048576){message('ZIP part ready. Download it and confirm ZIP saved, or discard buffered outputs before resuming. Choose folder mode for continuous saving.');return;}
       }
       message(stopAfter?'Batch paused. Saved outputs are retained; resume when ready.':`Batch finished. ${buffered.length?'Download and confirm the remaining ZIP part. ':''}Check the row report for skipped or failed items.`);
     }finally{uploadController=null;lock(false);}
@@ -238,9 +252,21 @@
       download(blob,`transitions-${queue.id.slice(0,8)}-part-${queue.part}.zip`);downloaded=true;message('ZIP download started. Verify it finished and opens correctly, then click “ZIP saved: clear part”.');
     }catch(e){message(e.message,true);}finally{render();}
   };
+  async function clearBuffered(state){
+    const previous=queue;
+    try{
+      const ids=buffered.map(x=>x.id),rows=queue.rows.filter(r=>ids.includes(r.id)).map(r=>({...r,state,error:state==='discarded'?'Output deliberately discarded without downloading.':''}));
+      const changed=new Map(rows.map(r=>[r.id,r]));queue={...queue,part:queue.part+1,rows:queue.rows.map(r=>changed.get(r.id)||r)};
+      await checkpoint({rows,remove:ids});buffered=[];downloaded=false;
+    }catch(e){queue=previous;throw e;}
+  }
+  $('batch-discard').onclick=async()=>{
+    if(!buffered.length||!confirm(`Permanently discard these ${buffered.length} buffered videos without downloading? These rows will be marked discarded and will NOT run again automatically. Provider charges are not refunded. Pending rows are kept.`))return;
+    try{await clearBuffered('discarded');message('Buffered outputs discarded. Pending rows are kept; resume when ready.');}catch(e){message(e.message,true);}finally{render();}
+  };
   $('batch-ack').onclick=async()=>{
-    if(!confirm('Have you saved and checked this ZIP? Its buffered videos will be removed from browser storage.'))return;
-    try{const ids=buffered.map(x=>x.id),rows=queue.rows.filter(row=>ids.includes(row.id));for(const row of rows)row.state='saved';queue.part++;await checkpoint({rows,remove:ids});buffered=[];downloaded=false;render();message('ZIP part cleared. Resume to process remaining rows.');}catch(e){message(e.message,true);}
+    if(!buffered.length||!downloaded||!confirm('Have you saved and checked this ZIP? Its buffered videos will be removed from browser storage.'))return;
+    try{await clearBuffered('saved');message('ZIP part cleared. Resume to process remaining rows.');}catch(e){message(e.message,true);}finally{render();}
   };
   $('batch-report').onclick=()=>download(new Blob([report()],{type:'text/csv'}),'batch-report.csv');
   async function resolveRows(retry){
@@ -259,11 +285,12 @@
   }
   $('batch-retry').onclick=()=>resolveRows(true);$('batch-skip').onclick=()=>resolveRows(false);
   $('batch-reset').onclick=async()=>{
-    if(running||!confirm('Clear this browser’s batch checkpoint and any buffered ZIP files? Download results/report first. Files already saved to your computer are kept.'))return;
+    if(running||!confirm('Permanently discard this browser’s whole batch checkpoint and any buffered ZIP files without downloading? Download anything you want to keep first. Files already saved to your computer are kept.'))return;
+    const previous=queue;
     try{
       const current=await api('/api/batch');if(current.rowId)await api('/api/batch/release','POST',{rowId:current.rowId});
       queue=null;await checkpoint({clear:true});buffered=[];downloaded=false;page=0;$('batch-rows').replaceChildren();$('batch-metrics').textContent='No CSV loaded.';$('batch-progress').value=0;$('batch-page').textContent='';render();message('Checkpoint cleared. Load another CSV.');
-    }catch(e){message(e.message,true);}
+    }catch(e){queue=previous;render();message(e.message,true);}
   };
   // All persistent edits share one origin-wide lease. Refresh the checkpoint under
   // that lease so an idle second tab cannot resubmit rows completed in the first.
@@ -279,7 +306,7 @@
       });
     }catch(e){message(`Paused: ${e.message}`,true);}finally{editing=false;render();}
   };}
-  for(const id of ['batch-start','batch-validate','batch-download','batch-ack','batch-retry','batch-skip','batch-reset'])$(id).onclick=exclusive($(id).onclick);
+  for(const id of ['batch-start','batch-validate','batch-download','batch-ack','batch-retry','batch-skip','batch-reset','batch-discard'])$(id).onclick=exclusive($(id).onclick);
   $('batch-csv').onchange=exclusive($('batch-csv').onchange);
   window.addEventListener('beforeunload',event=>{if(running){event.preventDefault();event.returnValue='';}});
   storage.then(async value=>{
