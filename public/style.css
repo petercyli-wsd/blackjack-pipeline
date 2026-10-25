@@ -100,6 +100,7 @@ dialog a{display:block;color:var(--mint);margin:15px 0}
 .batch-estimates{margin-top:22px;padding:16px;border:1px solid var(--border);border-radius:8px;background:#111e29}
 #batch-estimate{white-space:pre-line;color:#c6e6db;margin-bottom:0}
 #restore-prompt{margin-top:10px}
+.quality-settings{border-top:1px solid var(--border);margin-top:20px;padding-top:10px}.quality-settings h3{margin-bottom:14px}.quality-settings details{margin-top:12px}#quality-result{white-space:pre-line;padding:14px;background:#111e29;border:1px solid var(--border);border-radius:8px;overflow-wrap:anywhere}
 #batch-status{padding:12px;background:#1d2e31;border-radius:7px;line-height:1.7;overflow-wrap:anywhere}#batch-status.error{background:#362a2d;color:#ffb6ae}
 #batch-progress{width:100%;height:12px;accent-color:var(--mint)}.batch-table-wrap{max-height:420px;overflow:auto;margin-top:18px}
 .batch-panel table{border-collapse:collapse;width:100%;font-size:12px;text-align:left}.batch-panel th{position:sticky;top:0;background:#25354a}

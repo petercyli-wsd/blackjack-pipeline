@@ -21,7 +21,7 @@
       <p id="key-status" class="key-status" role="status">Checking session...</p>
       <details class="session-details"><summary>Privacy, session limits &amp; uploads</summary>
         <p class="help">Keys stay in server memory for your browser session, never saved or shared with other users. Keys expire after 8 hours; idle sessions and files expire after 2 hours. Use Clear keys or End my session to remove them.</p>
-        <p class="help" id="hosting-note">Videos go to this app's processing server; only boundary images go to fal/KIE. Download results before ending your session. Single-pair limits: 512 MB per video, 1 GB uploads and 5 renders per session; clips up to 10 minutes. CSV batches recycle a separate two-video workspace after each saved row. Batch checkpoints and buffered ZIPs stay in this browser until you clear them.</p>
+        <p class="help" id="hosting-note">Videos go to this app's processing server. Generation sends boundary images to fal/KIE; optional AI review also sends reference images and sampled frames across the bridge and both joins through fal/OpenRouter. Download results before ending your session. Single-pair limits: 512 MB per video, 1 GB uploads and 5 renders per session; clips up to 10 minutes. CSV batches recycle a separate workspace (two sources and, for existing-output review, one result) after each saved row. Batch checkpoints and buffered ZIPs stay in this browser until you clear them.</p>
       </details>
     </div>
     <div class="credential-inputs">
@@ -62,12 +62,25 @@
       <p class="help" id="timing"></p>
       <div id="prompt-wrap"><label>Movement instructions<textarea id="prompt" rows="7" maxlength="2000"></textarea></label><button id="restore-prompt" class="quiet">Restore card-preserving prompt</button><p class="help">Describe which hand moves which card, and where it ends. Keep still cards fixed. This prompt aims to reduce continuity errors; it cannot guarantee realism. Inspect both joins and every card. For a small pose gap, compare FILM/RIFE.</p></div>
       <label class="check"><input type="checkbox" id="mute"> Mute all output audio</label>
+      <section class="quality-settings" aria-labelledby="quality-title">
+        <h3 id="quality-title">Quality review</h3>
+        <label>After generation<select id="quality-mode"><option value="off">Off — manual inspection</option><option value="review">AI review — flag problems</option><option value="redo">AI review + automatic redos</option></select></label>
+        <p class="help">Uses your fal key for GPT-6 visual review of reference images and timestamped frames across the bridge and both joins. Two independent checks must agree before an automatic redo. Uncertain results need a person; AI approval is not a guarantee.</p>
+        <details><summary>Redo limit &amp; appearance policy</summary>
+          <label>Maximum extra generations per row<select id="quality-retries"><option value="1">1 redo</option><option value="2">2 redos</option><option value="0">0 — review only</option></select></label>
+          <label>Appearance policy<select id="quality-appearance"><option value="strict">Keep identity, appearance and geometry</option><option value="reskin">Later reskin: tolerate cosmetic texture/colour changes</option></select></label>
+          <p class="help">Reskin mode still rejects warped hands, body/sleeve/hair geometry, occlusion errors and changing cards. Automatic redos use the same Kling/Seedance method and duration. FILM, RIFE and local methods are flagged for manual review instead of repeating the same interpolation.</p>
+        </details>
+        <p class="help">Reviews and redos use extra credits. Existing outputs and any rejected result that still needs review are kept separate from approved files.</p>
+      </section>
       <details><summary>Audio &amp; output details</summary><p class="help">Source audio is kept with short fades around silent bridges. Dissolves crossfade audio. Output fits clip A, up to 1920 px wide.</p></details>
       <div class="actions generate-actions"><button id="generate" class="primary" disabled>Create transition</button><button id="cancel" hidden>Cancel</button></div>
       <p class="help" id="generate-hint">Choose both clips to continue.</p>
     </article>
     <article class="card batch-panel" id="batch-panel" hidden>
       <div class="section-label"><h2>Process a CSV batch</h2><span class="badge">UP TO 10,000 PAIRS</span></div>
+      <label>Batch task<select id="batch-workflow"><option value="generate">Generate from source clips</option><option value="existing">Review an existing output folder (optionally redo)</option></select></label>
+      <div id="batch-existing-wrap" hidden><label>Select existing output folder<input id="batch-existing-folder" type="file" webkitdirectory multiple></label><p id="batch-existing-info" class="help">Match files using the CSV output column, relative to this folder. Select full A + bridge + B outputs, not bridge-only files. Also select the source folder below. Set the original method/duration in the CSV if you want automatic redos.</p></div>
       <p class="help">Every row produces the full first video + bridge + full second video. Dissolve overlaps the clips instead. Optional CSV method and duration override the panel defaults. FPS, movement instructions and mute are shared. Rows run in CSV order, one at a time. Resolved settings and CSV roots freeze at the first start; clear the CSV to start a new batch with different settings.</p>
       <p class="help" id="batch-settings-summary" role="status"></p>
       <details open><summary>1. Match your local files</summary>
@@ -82,6 +95,7 @@
         <label>Output destination<select id="batch-destination"><option value="zip">ZIP parts (all modern browsers)</option><option value="folder">Save directly to a folder (supported browsers)</option></select></label>
         <div class="actions"><button id="batch-output-folder">Choose output folder</button><span id="batch-destination-info" class="help">ZIPs keep relative output folders and filenames.</span></div>
       <p class="help">For continuous saving, choose folder mode: each finished MP4 goes directly to disk. ZIP mode pauses after 20 files or 250 MB; download and confirm each part, or explicitly discard it to continue. Existing files are never overwritten.</p>
+      <p class="help">With review enabled, approved videos go into <code>approved/</code>; anything still needing inspection goes into <code>needs-review/</code>. Select a new destination folder. Original imported files are never modified. Download the row report for verdicts, evidence, attempts and request IDs.</p>
       </details>
       <section class="batch-estimates" aria-labelledby="estimate-title"><h3 id="estimate-title">3. Plan your batch</h3><p id="batch-estimate" class="help" aria-live="polite">Load a CSV to see estimated time and provider cost before starting.</p><details><summary>Estimate assumptions &amp; overrides</summary><p id="batch-estimate-basis" class="help"></p>
         <div class="fields"><label>Estimated provider cost per row<input id="batch-unit-cost" type="number" min="0" step="any" placeholder="Optional: override automatic estimate"></label><label>Cost unit<select id="batch-cost-unit"><option>USD</option><option>credits</option></select></label></div>
@@ -105,6 +119,7 @@
       <div class="preview-stage"><video id="result" controls loop hidden aria-label="Rendered result"></video><div class="empty" id="empty"><span aria-hidden="true">&#9654;</span>Your transition preview will appear here.<small>Check motion, identity and objects at both joins.</small></div></div>
       <div class="review-actions"><div class="actions playback-actions" role="group" aria-label="Playback length"><button id="preview" disabled>Join preview</button><button id="full" disabled>Full video</button></div><div class="actions export-actions"><button id="export" class="accent" disabled>Export MP4</button><button id="reveal" class="quiet" disabled>Download files</button></div></div>
       <p id="result-info" class="help"></p>
+      <p id="quality-result" class="help" role="status" hidden></p><button id="quality-report" class="quiet" hidden>Download quality report</button>
       <div class="anchors" id="anchors" hidden><figure><img id="anchor-a" alt="Last retained frame of clip A"><figcaption>Outgoing boundary</figcaption></figure><span aria-hidden="true">&#8594;</span><figure><img id="anchor-b" alt="First retained frame of clip B"><figcaption>Incoming boundary</figcaption></figure></div>
       <div id="status" role="status" aria-live="polite">Ready. Select two clips.</div>
       <details class="processing-log"><summary>Processing log</summary><pre id="log" aria-label="Processing log"></pre></details>

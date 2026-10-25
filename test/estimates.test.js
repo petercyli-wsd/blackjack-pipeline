@@ -2,6 +2,15 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {estimate,aggregate}=require('../public/batch-estimates');
 
+test('quality estimates include vision checks and bounded worst-case redos before starting',()=>{
+  const groups=[{method:'kling-fal',duration:3,rows:4}];
+  const basic=aggregate(groups),review=aggregate(groups,{review:{mode:'redo',maxRetries:2}}),existing=aggregate(groups,{workflow:'existing',review:{mode:'review',maxRetries:2}});
+  assert.ok(review.cost[0]>basic.cost[0]);assert.ok(review.cost[1]>basic.cost[1]*3);assert.ok(existing.cost[0]<basic.cost[0]);assert.equal(existing.cost[0],.04);assert.equal(existing.cost[1],.6);
+  assert.match(review.parts[0].basis,/all 2 permitted redos/);
+  const film=aggregate([{method:'film',duration:.4,rows:1}],{review:{mode:'redo',maxRetries:2},unit:'credits',unitCost:99});
+  assert.match(film.parts[0].basis,/all 0 permitted redos/);assert.equal(film.unit,'USD');assert.ok(film.cost[1]<99);
+});
+
 test('mixed estimates sum distinct methods/durations, reject blanket overrides and use matching time samples',()=>{
   const groups=[{method:'film',duration:.33,rows:41},{method:'film',duration:.67,rows:123},{method:'kling-fal',duration:3,rows:4},{method:'blend',duration:.3,rows:2}];
   const result=aggregate(groups,{unitCost:999,unit:'credits',samples:[{method:'film',duration:.33,elapsed:10}]});

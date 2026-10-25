@@ -6,6 +6,35 @@ const {setTimeout:delay}=require('node:timers/promises');
 const {createStudio}=require('../server');
 const {ff}=require('../src/media');
 
+test('quality review HTTP integration preserves session isolation, restores reports and imports candidates idempotently',{timeout:120000},async()=>{
+  await fs.mkdir('output',{recursive:true});const root=await fs.mkdtemp(path.resolve('output/review-http-')),clip=path.join(root,'input.mp4');
+  await ff(['-f','lavfi','-i','color=size=96x64:rate=24:duration=0.5','-c:v','libx264',clip]);
+  let reviews=0;
+  const app=await createStudio({dataDir:path.join(root,'data'),reviewVideo:async(result,o,{key,onProviderJob})=>{assert.equal(key,'review-session-key');reviews++;onProviderJob({provider:'fal',requestId:`review-${reviews}`,phase:'review'});return {verdict:'pass',confidence:.95,summary:'Clean',issues:[]};}});
+  async function client(){const s=await fetch(app.url+'/api/session'),{token}=await s.json(),headers={Cookie:s.headers.get('set-cookie').split(';')[0],'X-Studio-Token':token};
+    const request=(route,method='GET',data)=>fetch(app.url+route,{method,headers:{...headers,'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data)});
+    const api=async(...args)=>{const response=await request(...args),data=await response.json();assert.ok(response.ok,JSON.stringify(data));return data;};
+    const upload=async(route,bytes)=>{const r=await fetch(app.url+route,{method:'POST',headers,body:bytes});const data=await r.json();assert.ok(r.ok,JSON.stringify(data));return data;};
+    const wait=async id=>{for(let i=0;i<1000;i++){const j=await api('/api/jobs/'+id);if(j.state!=='running'){assert.equal(j.state,'complete',j.error);return j;}await delay(20);}throw new Error('Timeout');};return {headers,request,api,upload,wait};}
+  try{
+    const a=await client(),b=await client(),bytes=await fs.readFile(clip),source=await a.upload('/api/upload',bytes);
+    const options={a:source.id,b:source.id,aEnd:.5,bStart:0,method:'blend',duration:.25,fps:24,prompt:'Small movement',review:{mode:'review',maxRetries:0}};
+    assert.equal((await a.request('/api/process','POST',options)).status,428);
+    await a.api('/api/keys','POST',{fal:'review-session-key'});
+    const job=await a.wait((await a.api('/api/process','POST',options)).id);assert.equal(job.result.review.verdict,'pass');assert.equal(job.providerJobs[0].phase,'review');assert.equal(reviews,1);
+    const restored=await a.wait((await a.api('/api/latest','POST',{})).id);assert.equal(restored.result.review.verdict,'pass');assert.equal(reviews,1);
+    assert.equal((await b.request(job.result.url)).status,404);
+    const output=Buffer.from(await (await a.request(job.result.url)).arrayBuffer());
+    await a.api('/api/batch/row','POST',{rowId:'review-existing'});
+    for(const slot of ['a','b','candidate'])await a.upload(`/api/batch/upload?rowId=review-existing&slot=${slot}`,slot==='candidate'?output:bytes);
+    const imported={...options,method:'kling-kie',duration:3,workflow:'existing',rowId:'review-existing'};
+    assert.equal((await a.request('/api/batch/process','POST',{...imported,review:{mode:'off'}})).status,400);
+    const start=await a.api('/api/batch/process','POST',imported);assert.equal((await a.api('/api/batch/process','POST',imported)).id,start.id);
+    const reviewed=await a.wait(start.id);assert.equal(reviewed.result.review.verdict,'pass');assert.equal(reviewed.result.review.attempts[0].source,'existing');assert.equal(reviews,2);
+    await a.api('/api/batch/release','POST',{rowId:'review-existing'});assert.equal((await a.request(reviewed.result.url)).status,404);assert.equal((await a.request(job.result.url)).status,200);
+  }finally{await app.close();}
+});
+
 test('clear results frees the render limit, protects running jobs and preserves keys, inputs, batch and other users',{timeout:60000},async()=>{
   await fs.mkdir('output',{recursive:true});
   const root=await fs.mkdtemp(path.resolve('output/clear-test-')),input=path.join(root,'input.mp4');

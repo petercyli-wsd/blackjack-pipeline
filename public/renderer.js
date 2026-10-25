@@ -2,6 +2,7 @@
 let methods=[],clips={},result=null,busy=false,importing=false,keyReady={fal:false,kie:false};
 let reviewMode='preview',defaultPrompt='',batchContext={active:false,hasGenerative:false};
 const selectedMethod=()=>methods.find(m=>m.id===$('method').value);
+const qualitySettings=()=>({mode:$('quality-mode').value,maxRetries:Number($('quality-retries').value),appearance:$('quality-appearance').value});
 const hasPendingKeys=()=>!!($('fal-key').value.trim()||$('kie-key').value.trim());
 const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);};
 const fail=e=>status(e.message.replace(/^Error invoking remote method '[^']+': Error: /,''),true);
@@ -23,7 +24,8 @@ function offerReconnect(id,requestId){
 function readiness(){
   try{window.StudioFrameRate.parse($('fps').value,true);$('fps').setCustomValidity('');}catch(e){$('fps').setCustomValidity(e.message);}
   const m=selectedMethod(),locked=busy||importing;
-  const hasKey=m&&(m.provider==='local'||keyReady[m.provider]||$(`${m.provider}-key`).value.trim());
+  const reviewKeyMissing=$('quality-mode').value!=='off'&&!keyReady.fal&&!$('fal-key').value.trim();
+  const hasKey=m&&(m.provider==='local'||keyReady[m.provider]||$(`${m.provider}-key`).value.trim())&&($('quality-mode').value==='off'||keyReady.fal||$('fal-key').value.trim());
   $('generate').disabled=!!locked||!clips.a||!clips.b||!hasKey||!$('fps').validity.valid;
   $('save-keys').disabled=!!locked||!hasPendingKeys();
   $('forget-keys').disabled=!!locked||(!keyReady.fal&&!keyReady.kie&&!hasPendingKeys());
@@ -33,7 +35,7 @@ function readiness(){
     $(slot==='a'?'a-end':'b-start').disabled=!!locked||!clips[slot];
     $(`use-${slot}`).disabled=!!locked||!clips[slot];
   }
-  $('generate-hint').textContent=busy?'Processing. You can cancel below.':importing?'Uploading your clip...':!m?'Loading methods...':!clips.a||!clips.b?'Choose both clips to continue.':!hasKey?`Add your ${m.provider==='fal'?'fal':'KIE'} key in Provider credentials above.`:!$('fps').validity.valid?$('fps').validationMessage:'Ready. Your output includes clip A, the transition and clip B.';
+  $('generate-hint').textContent=busy?'Processing. You can cancel below.':importing?'Uploading your clip...':!m?'Loading methods...':!clips.a||!clips.b?'Choose both clips to continue.':!hasKey?reviewKeyMissing?'Add your fal key above for quality review.':`Add your ${m.provider==='fal'?'fal':'KIE'} key in Provider credentials above.`:!$('fps').validity.valid?$('fps').validationMessage:'Ready. Your output includes clip A, the transition and clip B.';
   if(m){
     $('provider-note').textContent=m.provider==='local'?'Runs on this server. No provider credits.':`${m.provider==='fal'?'fal':'KIE'} ${keyReady[m.provider]?'key ready':hasKey?'key entered':'key needed'} - uses your provider credits`;
     $('provider-note').classList.toggle('needs-key',!hasKey);
@@ -109,7 +111,11 @@ function receiveResult(r){
   result=r;reviewMode='preview';$('comparison').value='transition';$('empty').hidden=true;$('result').hidden=false;$('anchors').hidden=false;$('anchor-a').src=r.frames[0];$('anchor-b').src=r.frames[1];
   for(const id of ['preview','full','export','reveal','comparison'])$(id).disabled=false;
   showResult();$('result-status').textContent='READY TO REVIEW';
+  $('quality-result').hidden=!r.review;$('quality-report').hidden=!r.review;
+  if(r.review){$('result-status').textContent=r.review.verdict==='pass'?'AI REVIEW PASSED':'NEEDS HUMAN REVIEW';$('quality-result').textContent=`${r.review.verdict==='pass'?'AI review passed':'Needs review'}: ${r.review.summary} (${r.review.redoCount} redos). `+r.review.attempts.flatMap(a=>(a.assessment?.issues||[]).map(i=>`Attempt ${a.attempt}, ${i.time.toFixed(2)}s: ${i.evidence}`)).join(' ');}
 }
+$('quality-report').onclick=()=>{if(!result?.review)return;const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(result.review,null,2)],{type:'application/json'}));a.href=url;a.download='quality-report.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);};
+for(const id of ['quality-mode','quality-retries','quality-appearance'])$(id).addEventListener('change',readiness);
 $('method').onchange=methodChange;
 $('fps').addEventListener('input',readiness);
 $('restore-prompt').onclick=()=>{$('prompt').value=defaultPrompt;};
@@ -122,7 +128,7 @@ $('clear-results').onclick=async()=>{
     $('empty').hidden=false;$('anchors').hidden=true;
     for(const id of ['anchor-a','anchor-b'])$(id).removeAttribute('src');
     for(const id of ['preview','full','export','reveal','comparison'])$(id).disabled=true;
-    $('result-info').textContent='';$('log').textContent='';$('reconnect-render')?.remove();
+    $('result-info').textContent='';$('quality-result').hidden=true;$('quality-report').hidden=true;$('log').textContent='';$('reconnect-render')?.remove();
     $('result-status').textContent='RESULTS CLEARED';status('Old renders cleared. Choose a method and create another transition. Your source uploads and keys are kept.');
   }catch(e){fail(e);}finally{setBusy(false);}
 };
@@ -136,7 +142,7 @@ $('generate').onclick=async()=>{
   setBusy(true);$('log').textContent='';status('Starting...');$('result-status').textContent='PROCESSING';
   try{
     await applyKeys();
-    const r=await window.studio.process({a:clips.a.id,b:clips.b.id,method:$('method').value,duration:Number($('duration').value),aEnd:Number($('a-end').value),bStart:Number($('b-start').value),fps:$('fps').value.trim(),prompt:$('prompt').value,mute:$('mute').checked});
+    const r=await window.studio.process({a:clips.a.id,b:clips.b.id,method:$('method').value,duration:Number($('duration').value),aEnd:Number($('a-end').value),bStart:Number($('b-start').value),fps:$('fps').value.trim(),prompt:$('prompt').value,mute:$('mute').checked,review:qualitySettings()});
     receiveResult(r);status('Complete. Review both joins before exporting.');
   }catch(e){renderFailure(e);}finally{setBusy(false);}
 };
@@ -167,6 +173,6 @@ readiness();
 window.studioUI={
   isBusy:()=>busy||importing,lock:setBusy,applyKeys,methods:()=>methods,
   setBatchContext:context=>{batchContext=context;updateBatchContext();},
-  settings:()=>({method:$('method').value,duration:Number($('duration').value),fps:$('fps').value.trim(),prompt:$('prompt').value,mute:$('mute').checked}),
-  restoreSettings:o=>{$('method').value=o.method;methodChange();for(const id of ['duration','fps','prompt'])$(id).value=o[id];$('mute').checked=o.mute;readiness();}
+  settings:()=>({method:$('method').value,duration:Number($('duration').value),fps:$('fps').value.trim(),prompt:$('prompt').value,mute:$('mute').checked,review:qualitySettings()}),
+  restoreSettings:o=>{$('method').value=o.method;methodChange();for(const id of ['duration','fps','prompt'])$(id).value=o[id];$('mute').checked=o.mute;$('quality-mode').value=o.review?.mode||'off';$('quality-retries').value=o.review?.maxRetries??1;$('quality-appearance').value=o.review?.appearance||'strict';readiness();}
 };

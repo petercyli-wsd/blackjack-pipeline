@@ -10,11 +10,11 @@ const METHODS = [
 ];
 const DEFAULT_PROMPT = [
   'One continuous photorealistic shot from a fixed camera, matching the supplied first and last frames. Preserve the same dealer, face, clothing, table layout, lighting and background.',
-  'Make only the minimum natural hand and body motion needed to reach the ending pose; no extra dealing, collecting, shuffling, gestures or camera movement.',
+  'Move hands and forearms directly along the shortest natural path to the ending pose, then rest. No detours, extra tasks, dealing, collecting, shuffling or gestures. Do not reach for, touch or move either card holder, discard tray or shoe unless the endpoint explicitly requires contact. Never invent a card transfer to fill time.',
   'Treat every card and chip as the same persistent physical object throughout. Cards resting on the table stay fixed unless their movement is required by the ending frame.',
   "Preserve each card's size, thickness, rectangular shape, back design and visible rank/suit. Do not flip cards unless the ending frame requires it; required flips use continuous physical rotation.",
   "A moved card follows one continuous physical path under the hand's control, with consistent grip, contact, perspective and shadow. When fingers cover a card, it remains behind them and reappears intact as the hand moves away.",
-  'Cards do not vanish, fade, dissolve, duplicate, merge, change identity or teleport. Maintain coherent fingers and wrists without hands passing through cards or the table.',
+  'Cards never vanish, fade, duplicate, merge or teleport. Maintain coherent fingers, wrists, grips and contact. Preserve body proportions and silhouette, sleeve shape, clothing seams and hair volume; natural cloth/hair motion only, no melting or morphing.',
   'Match the final card positions and hand pose exactly without a last-frame snap. If an object is only visible at one boundary, account for it through continuous physically plausible movement or occlusion; never make it appear or disappear by fading.'
 ].join(' ');
 

@@ -6,9 +6,9 @@
   const terminal=['saved','buffered','failed','cancelled','invalid','skipped','discarded','uncertain'];
   const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   let queue=null,files=new Map(),foldedFiles=new Map(),destination=null,running=false,stopAfter=false,cancelled=false,uploadController=null,page=0,downloaded=false;
-  let buffered=[],db,available=false,editing=false;
+  let buffered=[],db,available=false,editing=false,existingFiles=new Map();
   const message=(text,error=false)=>{$('batch-status').textContent=text;$('batch-status').classList.toggle('error',error);};
-  const ids=['batch-csv','batch-folder','batch-input-root','batch-output-root','batch-destination','batch-output-folder','batch-validate','batch-start','batch-reset','batch-retry','batch-skip','batch-download','batch-ack','batch-discard','batch-unit-cost','batch-cost-unit','mode-single','mode-batch'];
+  const ids=['batch-workflow','batch-existing-folder','batch-csv','batch-folder','batch-input-root','batch-output-root','batch-destination','batch-output-folder','batch-validate','batch-start','batch-reset','batch-retry','batch-skip','batch-download','batch-ack','batch-discard','batch-unit-cost','batch-cost-unit','mode-single','mode-batch'];
   function lock(value){running=value;ui.lock(value);for(const id of ids)$(id).disabled=value;$('batch-pause').disabled=!value;$('batch-cancel').disabled=!value;render();}
   const storage=new Promise((resolve,reject)=>{
     const request=indexedDB.open('dealer-transition-batches',1);
@@ -35,12 +35,13 @@
   const resolveRow=row=>BatchSettings.resolve(row,queue?.settings||ui.settings(),ui.methods());
   function previewSettings(row){try{return resolveRow(row);}catch{return null;}}
   function report(){return BatchFormat.csv([
-    ['first_half','second_half','output','row','status','error','method','duration','setting_source','method_source','duration_source','bridge_seconds','actual_bridge_seconds','bridge_frames','fps','encoded_fps','elapsed_seconds','provider','provider_request_id','zip_part','previous_attempts'],
-    ...(queue?.rows||[]).map(r=>{const s=previewSettings(r);return [r.first,r.second,r.output,r.number,r.state,r.error,s?.method||r.csvMethod,s?.duration??r.csvDuration,s?.settingSource,s?.methodSource,s?.durationSource,s?.duration,r.result?.bridgeDuration,r.result?.bridgeFrames,(queue.settings||ui.settings()).fps,r.result?.fpsRational,r.elapsed?.toFixed(1),r.providerJob?.provider,r.providerJob?.requestId,r.part,r.history?JSON.stringify(r.history):''].map(value=>typeof value==='string'&&/^[=+@\-\t\r]/.test(value)?"'"+value:value);})
+    ['first_half','second_half','output','row','status','error','method','duration','setting_source','method_source','duration_source','bridge_seconds','actual_bridge_seconds','bridge_frames','fps','encoded_fps','elapsed_seconds','provider','provider_request_id','zip_part','previous_attempts','saved_path','quality_verdict','quality_summary','redo_count','quality_details','all_provider_requests'],
+    ...(queue?.rows||[]).map(r=>{const s=previewSettings(r);return [r.first,r.second,r.output,r.number,r.state,r.error,s?.method||r.csvMethod,s?.duration??r.csvDuration,s?.settingSource,s?.methodSource,s?.durationSource,s?.duration,r.result?.bridgeDuration,r.result?.bridgeFrames,(queue.settings||ui.settings()).fps,r.result?.fpsRational,r.elapsed?.toFixed(1),r.providerJob?.provider,r.providerJob?.requestId,r.part,r.history?JSON.stringify(r.history):'',r.savedName,r.result?.review?.verdict,r.result?.review?.summary,r.result?.review?.redoCount,r.result?.review?JSON.stringify(r.result.review):'',r.providerJobs?JSON.stringify(r.providerJobs):''].map(value=>typeof value==='string'&&/^[=+@\-\t\r]/.test(value)?"'"+value:value);})
   ]);}
   function mode(batch){if(running)return;document.body.classList.toggle('batch-mode',batch);$('batch-panel').hidden=!batch;$('mode-batch').setAttribute('aria-pressed',String(batch));$('mode-single').setAttribute('aria-pressed',String(!batch));render();}
   $('mode-single').onclick=()=>mode(false);$('mode-batch').onclick=()=>mode(true);
   function render(){
+    $('batch-existing-wrap').hidden=$('batch-workflow').value!=='existing';
     $('batch-csv').hidden=!!queue;
     $('batch-csv-info').textContent=queue?`Loaded: ${queue.csvName||'CSV from saved checkpoint'} (${queue.rows.length} ${queue.rows.length===1?'row':'rows'}).`:'';
     $('batch-reset').hidden=!queue;
@@ -48,6 +49,7 @@
     $('batch-download').disabled=running||editing||!buffered.length;$('batch-ack').disabled=running||editing||!buffered.length||!downloaded;
     $('batch-start').disabled=running||editing||!available||!queue;$('batch-output-folder').disabled=running||editing||$('batch-destination').value!=='folder'||!window.showDirectoryPicker;
     for(const id of ['batch-input-root','batch-output-root'])$(id).disabled=running||editing||!!queue?.settings;
+    $('batch-workflow').disabled=running||editing||!!queue?.settings;
     $('batch-pause').hidden=!running;$('batch-cancel').hidden=!running;
     $('batch-zip-actions').hidden=!buffered.length;
     $('batch-discard').disabled=running||editing||!buffered.length;
@@ -58,7 +60,7 @@
     const settings=queue?.settings||ui.settings(),methods=ui.methods();
     const groups=BatchSettings.groups(queue?.rows||[],settings,methods);
     ui.setBatchContext({active:document.body.classList.contains('batch-mode'),hasGenerative:groups.some(g=>{const m=methods.find(m=>m.id===g.method);return m.provider!=='local'&&m.kind!=='interpolation';})});
-    $('batch-settings-summary').textContent=queue?`${queue.settings?'Frozen at first start':'Resolved settings (validate after changing defaults)'}: ${groups.slice(0,8).map(g=>`${g.rows} × ${g.method}, ${g.duration}s`).join('; ')||'No valid settings'}${groups.length>8?`; and ${groups.length-8} more groups (see row table/report)`:''}. FPS, movement instructions and mute are shared; movement instructions apply to generative rows.`:'';
+    $('batch-settings-summary').textContent=queue?`${queue.settings?'Frozen at first start':'Resolved settings (validate after changing defaults)'}: ${groups.slice(0,8).map(g=>`${g.rows} × ${g.method}, ${g.duration}s`).join('; ')||'No valid settings'}${groups.length>8?`; and ${groups.length-8} more groups (see row table/report)`:''}. Quality review: ${settings.review?.mode||'off'}${settings.review?.mode==='redo'?`, max ${settings.review.maxRetries} redos`:''}; appearance: ${settings.review?.appearance||'strict'}. FPS, movement instructions and mute are shared; movement instructions apply to generative rows.`:'';
     $('batch-csv-warning').textContent=(queue?.warnings||[]).join(' ');
     if(!queue){$('batch-estimate').textContent='Load a CSV to see estimated time and provider cost before starting.';$('batch-estimate-basis').textContent='';return;}
     const counts={};for(const r of queue.rows)counts[r.state]=(counts[r.state]||0)+1;
@@ -67,22 +69,23 @@
     const pendingGroups=BatchSettings.groups(remainingRows,settings,methods),remaining=pendingGroups.reduce((n,g)=>n+g.rows,0);
     const samples=queue.rows.filter(r=>['saved','buffered','discarded'].includes(r.state)).map(r=>({...previewSettings(r),elapsed:r.elapsed}));
     const mixed=groups.length>1;
-    for(const id of ['batch-unit-cost','batch-cost-unit'])$(id).disabled=running||editing||mixed;
-    const estimate=window.BatchEstimates.aggregate(pendingGroups,{unitCost:mixed?'':$('batch-unit-cost').value,unit:$('batch-cost-unit').value,samples});
+    for(const id of ['batch-unit-cost','batch-cost-unit'])$(id).disabled=running||editing||mixed||!!(settings.review&&settings.review.mode!=='off');
+    const estimate=window.BatchEstimates.aggregate(pendingGroups,{unitCost:mixed?'':$('batch-unit-cost').value,unit:$('batch-cost-unit').value,samples,review:settings.review,workflow:queue.workflow||$('batch-workflow').value});
     if(groups.length){
       const time=seconds=>seconds<3600?`${Math.ceil(seconds/60)} min`:`${(seconds/3600).toFixed(1)} hr`;
       const cost=value=>estimate.unit==='USD'?`$${value.toFixed(2)}`:`${value.toFixed(2)} ${estimate.unit}`;
       const description=groups.length===1?`${groups[0].method}, ${groups[0].duration}s bridge`:'Mixed methods / durations';
       $('batch-estimate').textContent=`${queue.settings?'Locked batch':'Selected'}: ${description}. For ${remaining} unfinished rows with valid settings:\nApproximately ${time(estimate.time[0])} to ${time(estimate.time[1])}; provider cost ${cost(estimate.cost[0])} to ${cost(estimate.cost[1])}.\n${estimate.parts.slice(0,8).map(p=>`${p.rows} × ${p.method}, ${p.duration}s: ${time(p.time[0])}–${time(p.time[1])}, ${cost(p.cost[0])}–${cost(p.cost[1])}`).join('\n')}${estimate.parts.length>8?`\nPlus ${estimate.parts.length-8} more groups, included in totals.`:''}\n${estimate.measured?'Time uses recent completions of the same method and duration where available.':'Speculative time range available before starting.'} Planning estimates, not a quote or spending cap; actual totals can fall outside these ranges.`;
-      $('batch-estimate-basis').textContent=[...new Set(estimate.parts.map(p=>p.basis))].join(' ')+' '+(mixed?'A single per-row cost override is disabled for mixed settings; each group uses its own automatic range. ':'')+'Invalid/skipped rows and past charges are excluded. Failed rows assume one retry. Excludes extra retries, taxes and hosting charges. Time assumes continuous running; ZIP confirmations and sleep add delays.';
+      $('batch-estimate-basis').textContent=[...new Set(estimate.parts.map(p=>p.basis))].join(' ')+' '+(mixed?'A single per-row cost override is disabled for mixed settings; each group uses its own automatic range. ':'')+'Invalid/skipped rows and past charges are excluded. Failed rows assume one retry. Excludes retries beyond the selected limit, taxes and hosting charges. Time assumes continuous running; ZIP confirmations and sleep add delays.';
     }else{$('batch-estimate').textContent='Choose a valid method and duration to see estimates.';$('batch-estimate-basis').textContent='';}
     $('batch-metrics').textContent=`${complete} / ${queue.rows.length} outputs saved or buffered | ${counts.pending||0} pending | ${(counts.invalid||0)+(counts.failed||0)+(counts.cancelled||0)+(counts.skipped||0)} skipped/failed | ${counts.discarded||0} discarded | ${counts.uncertain||0} need review\n${buffered.length} files / ${(buffered.reduce((sum,x)=>sum+x.blob.size,0)/1048576).toFixed(1)} MB buffered for ZIP part ${queue.part}`;
+    const reviewed=queue.rows.filter(r=>r.result?.review);if(reviewed.length)$('batch-metrics').textContent+=`\nAI review: ${reviewed.filter(r=>r.result.review.verdict==='pass').length} approved | ${reviewed.filter(r=>r.result.review.verdict!=='pass').length} need human review | ${reviewed.reduce((n,r)=>n+r.result.review.redoCount,0)} redos`;
     $('batch-progress').max=queue.rows.length;$('batch-progress').value=queue.rows.filter(r=>terminal.includes(r.state)).length;
     page=Math.max(0,Math.min(page,Math.ceil(queue.rows.length/50)-1));const start=page*50;
     $('batch-rows').replaceChildren();
     for(const row of queue.rows.slice(start,start+50)){
       const s=previewSettings(row);
-      const tr=document.createElement('tr');for(const text of [row.number,row.name||row.output,s?`${s.method} · ${s.duration}s (${s.settingSource})`:'Invalid settings',`${row.state}${row.error?' — '+row.error:''}${row.providerJob?.requestId?' · Request '+row.providerJob.requestId:''}`]){const td=document.createElement('td');td.textContent=text;tr.append(td);}$('batch-rows').append(tr);
+      const tr=document.createElement('tr');for(const text of [row.number,row.savedName||row.name||row.output,s?`${s.method} · ${s.duration}s (${s.settingSource})`:'Invalid settings',`${row.state}${row.result?.review?' · '+row.result.review.verdict+': '+row.result.review.summary:''}${row.error?' — '+row.error:''}${row.providerJob?.requestId?' · Request '+row.providerJob.requestId:''}`]){const td=document.createElement('td');td.textContent=text;tr.append(td);}$('batch-rows').append(tr);
     }
     $('batch-page').textContent=`${start+1}–${Math.min(start+50,queue.rows.length)} of ${queue.rows.length}`;
     $('batch-prev').disabled=page===0;$('batch-next').disabled=start+50>=queue.rows.length;
@@ -105,14 +108,22 @@
         if(row[key]&&row[key]!==signature){row.state='invalid';row.error=`Source changed since validation: ${row[slot]}. Restore the original or start a new CSV.`;break;}
         row[key]=signature;
       }
+      if($('batch-workflow').value==='existing'){
+        const file=existingFiles.get(row.name);
+        if(!file){row.state='invalid';row.error=`Missing existing output: ${row.name}. Choose the folder matching the CSV output paths.`;}
+        else if(file.size>512*1048576){row.state='invalid';row.error=`Existing output exceeds 512 MB: ${row.name}`;}
+        else {const signature=`${file.size}:${file.lastModified}`;if(row.signatureCandidate&&row.signatureCandidate!==signature){row.state='invalid';row.error='Existing output changed since validation. Start a new CSV review.';}else row.signatureCandidate=signature;}
+      }
     }
     queue.inputRoot=$('batch-input-root').value;queue.outputRoot=$('batch-output-root').value;render();
   }
   $('batch-folder').onchange=()=>{
     files=new Map();foldedFiles=new Map();
     for(const file of $('batch-folder').files){const relative=file.webkitRelativePath.split('/').slice(1).join('/');files.set(relative,file);const key=relative.toLowerCase();foldedFiles.set(key,foldedFiles.has(key)?null:file);}
-    $('batch-source-info').textContent=`${files.size} files available locally from ${$('batch-folder').files[0]?.webkitRelativePath.split('/')[0]||'selected folder'}. Only the current row's two videos upload.`;
+    $('batch-source-info').textContent=`${files.size} files available locally from ${$('batch-folder').files[0]?.webkitRelativePath.split('/')[0]||'selected folder'}. Only files needed by the current row upload.`;
   };
+  $('batch-existing-folder').onchange=()=>{existingFiles=new Map();for(const file of $('batch-existing-folder').files){const name=file.webkitRelativePath.split('/').slice(1).join('/');existingFiles.set(name,existingFiles.has(name)?null:file);}$('batch-existing-info').textContent=`${existingFiles.size} existing files selected. CSV output paths must match relative to this folder. Original files are kept; reviewed copies go to a new destination.`;};
+  $('batch-workflow').onchange=()=>{if($('batch-workflow').value==='existing'&&$('quality-mode').value==='off')$('quality-mode').value='review';render();};
   $('batch-csv').onchange=async()=>{
     const previousQueue=queue;
     try{
@@ -131,6 +142,7 @@
   $('method').addEventListener('change',render);
   window.addEventListener('studio:ready',render);
   for(const id of ['duration','fps'])$(id).addEventListener('input',render);
+  for(const id of ['quality-mode','quality-retries','quality-appearance'])$(id).addEventListener('change',render);
   function checkCancelled(){if(cancelled)throw Object.assign(new Error('Cancelled by you. Submitted cloud work may still be billed.'),{cancelled:true});}
   async function release(row){await api('/api/batch/release','POST',{rowId:row.attempt});}
   async function cleanPrevious(){
@@ -143,6 +155,7 @@
     while(true){
       if(cancelled)await api('/api/batch/cancel','POST',{rowId:row.attempt});
       const job=await api(`/api/jobs/${id}`);
+      if(job.providerJobs&&job.providerJobs.length!==(row.providerJobs?.length||0)){row.providerJobs=job.providerJobs;await checkpoint({row});}
       if(job.providerJob&&!row.providerJob){row.providerJob=job.providerJob;await checkpoint({row});}
       message(`Row ${row.number}/${queue.rows.length}: ${job.messages.at(-1)||job.state}`);
       if(job.state!=='running')return job;
@@ -151,13 +164,14 @@
   }
   async function writeToFolder(row,response){
     if(!destination)throw new Error('Choose your output folder again to save this completed row.');
-    let dir=destination;const segments=row.name.split('/'),name=segments.pop();
+    let dir=destination;const segments=(row.savedName||row.name).split('/'),name=segments.pop();
     for(const segment of segments)dir=await dir.getDirectoryHandle(segment,{create:true});
     try{await dir.getFileHandle(name);throw new Error(`Output already exists: ${row.name}. Move it aside before resuming. It will not be overwritten.`);}catch(e){if(e.name!=='NotFoundError')throw e;}
     const handle=await dir.getFileHandle(name,{create:true});
     try{const writable=await handle.createWritable();await response.body.pipeTo(writable);}catch(e){await dir.removeEntry(name).catch(()=>{});throw e;}
   }
   async function saveOutput(row){
+    row.savedName=row.result.review?`${row.result.review.verdict==='pass'?'approved':'needs-review'}/${row.name}`:row.name;
     if($('batch-destination').value==='folder'){
       const response=await fetch(row.result.url);if(!response.ok)throw new Error('Completed result is no longer on the server. Check the provider request before retrying.');
       try{await writeToFolder(row,response);}finally{if(!response.body.locked)await response.body.cancel().catch(()=>{});}
@@ -169,15 +183,16 @@
       if(buffered.length&&(buffered.length>=20||buffered.reduce((n,x)=>n+x.blob.size,0)+size>250*1048576))throw new Error('ZIP part is full. Download it and confirm ZIP saved, or discard buffered outputs, then resume this completed row.');
       const response=await fetch(row.result.url);if(!response.ok)throw new Error('Result download failed. Resume to retry saving without generating again.');
       const blob=await response.blob();if(blob.size!==size)throw new Error('Incomplete result download. Resume to download it again.');
-      const item={id:row.id,name:row.name,blob};row.state='buffered';row.part=queue.part;row.error='';row.elapsed=(Date.now()-row.started)/1000;
+      const item={id:row.id,name:row.savedName,blob};row.state='buffered';row.part=queue.part;row.error='';row.elapsed=(Date.now()-row.started)/1000;
       try{await checkpoint({row,add:item});}catch(e){row.state='saving';throw new Error(`Could not checkpoint the output (${e.message}). Free browser storage or choose folder mode, then resume.`);}
       buffered.push(item);downloaded=false;
     }
     await release(row);render();
+    if(row.result.review?.pauseBatch)throw new Error('Result saved under needs-review. Review service or redo failed; check the row report and provider requests before resuming. No automatic resubmission was made.');
   }
   async function processRow(row){
     if(row.state==='pending'){
-      row.attempt=crypto.randomUUID();row.state='uploading';row.error='';row.started=Date.now();delete row.providerJob;delete row.result;delete row.jobId;await checkpoint({row});
+      row.attempt=crypto.randomUUID();row.state='uploading';row.error='';row.started=Date.now();delete row.providerJob;delete row.providerJobs;delete row.result;delete row.savedName;delete row.jobId;await checkpoint({row});
     }
     let workspace=await api('/api/batch');
     if(!workspace.rowId){
@@ -189,22 +204,22 @@
     if(workspace.rowId!==row.attempt)throw new Error('A different row still owns the workspace. Resume it first.');
     if(row.state==='saving'){await saveOutput(row);return;}
     if(!workspace.jobId){
-      for(const slot of ['a','b']){
+      for(const slot of queue.workflow==='existing'?['a','b','candidate']:['a','b']){
         checkCancelled();if(workspace.uploads?.[slot])continue;
-        const file=findFile(row[slot]);if(!file)throw Object.assign(new Error(`Reselect the source folder. Missing ${row[slot]}`),{pause:true});
-        const signature=row[slot==='a'?'signatureA':'signatureB'];if(signature&&signature!==`${file.size}:${file.lastModified}`)throw Object.assign(new Error(`Source changed: ${row[slot]}`),{pause:true});
-        message(`Row ${row.number}: uploading ${slot==='a'?'first':'second'} half (${(file.size/1048576).toFixed(1)} MB)...`);
+        const file=slot==='candidate'?existingFiles.get(row.name):findFile(row[slot]);if(!file)throw Object.assign(new Error(`Reselect the ${slot==='candidate'?'existing output':'source'} folder. Missing ${slot==='candidate'?row.name:row[slot]}`),{pause:true});
+        const signature=row[slot==='candidate'?'signatureCandidate':slot==='a'?'signatureA':'signatureB'];if(signature&&signature!==`${file.size}:${file.lastModified}`)throw Object.assign(new Error(`File changed: ${slot==='candidate'?row.name:row[slot]}`),{pause:true});
+        message(`Row ${row.number}: uploading ${slot==='candidate'?'existing output':slot==='a'?'first half':'second half'} (${(file.size/1048576).toFixed(1)} MB)...`);
         uploadController=new AbortController();await window.studio.batchUpload(file,row.attempt,slot,uploadController.signal);uploadController=null;
       }
       checkCancelled();row.state='submitting';await checkpoint({row});
       while(true){
         checkCancelled();
-        try{const s=resolveRow(row);const submitted=await api('/api/batch/process','POST',{...queue.settings,method:s.method,duration:s.duration,rowId:row.attempt});workspace.jobId=submitted.id;break;}
+        try{const s=resolveRow(row);const submitted=await api('/api/batch/process','POST',{...queue.settings,method:s.method,duration:s.duration,rowId:row.attempt,workflow:queue.workflow||'generate'});workspace.jobId=submitted.id;break;}
         catch(e){if(e.status!==429)throw e;message(`Row ${row.number}: waiting for the team's render slot...`);await wait(5000);}
       }
     }
     row.jobId=workspace.jobId;row.state='running';await checkpoint({row});render();
-    const job=await poll(row,workspace.jobId);row.providerJob=job.providerJob||row.providerJob;
+    const job=await poll(row,workspace.jobId);row.providerJob=job.providerJob||row.providerJob;row.providerJobs=job.providerJobs||row.providerJobs;
     if(job.state==='failed'){
       row.state=cancelled?'cancelled':'failed';row.error=job.error;await checkpoint({row});await release(row);
       if(!cancelled&&/\b(401|403|429|forbidden|unauthori[sz]ed|insufficient|credits|balance|quota|rate.?limit)\b/i.test(job.error||''))throw new Error(`Provider access/billing/rate limit needs attention: ${job.error}`);
@@ -217,6 +232,7 @@
     if(!queue)throw new Error('Upload a CSV first.');
     if($('batch-destination').value==='folder'&&!destination)throw new Error('Choose an output folder first.');
     if(!files.size&&queue.rows.some(r=>r.state==='pending'||r.state==='uploading'))throw new Error('Select your source folder first.');
+    if((queue.workflow||$('batch-workflow').value)==='existing'&&!existingFiles.size&&queue.rows.some(r=>['pending','invalid','uploading'].includes(r.state)))throw new Error('Select the existing output folder first.');
     if(buffered.length>=20||buffered.reduce((n,x)=>n+x.blob.size,0)>=250*1048576)throw new Error('Save and confirm the current ZIP part, or choose Discard buffered outputs, before continuing.');
     stopAfter=false;cancelled=false;lock(true);
     try{
@@ -228,10 +244,15 @@
       const needed=queue.rows.filter(r=>['pending',...pauseStates].includes(r.state));
       // Resolve every runnable row before any upload or checkpoint freeze.
       for(const row of needed)BatchSettings.resolve(row,settings,init.methods);
-      const missing=BatchSettings.missingKeys(needed,settings,init.methods,init.keys);
+      const workflow=queue.workflow||$('batch-workflow').value;
+      if(workflow==='existing'&&(!settings.review||settings.review.mode==='off'))throw new Error('Enable AI review for an existing output folder.');
+      if(settings.review?.mode!=='off'&&settings.review&&!init.keys.fal)throw new Error('Quality review needs your fal key. No videos were uploaded.');
+      if(settings.review?.mode!=='off'&&settings.review&&needed.some(r=>resolveRow(r).method==='dissolve'))throw new Error('Quality review supports inserted bridges, not overlapping dissolves. Split dissolve rows into a separate CSV or disable review.');
+      const missing=workflow==='existing'&&settings.review.mode==='review'?[]:BatchSettings.missingKeys(needed,settings,init.methods,init.keys);
       if(missing.length)throw new Error(`Missing provider keys — ${missing.join('; ')}. Enter these keys above, then resume. No videos were uploaded.`);
       for(const row of queue.rows)if(!row.resolvedSettings){try{row.resolvedSettings=BatchSettings.resolve(row,settings,init.methods);}catch{/* Invalid rows remain skipped, with the original validation error. */}}
       queue.settings=settings;
+      queue.workflow=workflow;
       queue.destination=$('batch-destination').value;queue.unitCost=$('batch-unit-cost').value;queue.costUnit=$('batch-cost-unit').value;await checkpoint({allRows:true});
       await cleanPrevious();
       if(queue.rows.some(r=>r.state==='uncertain'))throw new Error('Review interrupted rows, then explicitly retry or skip them before continuing.');
@@ -329,7 +350,7 @@
   storage.then(async value=>{
     db=value;queue=await readQueue();buffered=await allOutputs();available=true;
     if(queue){
-      $('batch-input-root').value=queue.inputRoot||'';$('batch-output-root').value=queue.outputRoot||'';$('batch-destination').value=queue.destination||'zip';$('batch-unit-cost').value=queue.unitCost||'';$('batch-cost-unit').value=queue.costUnit||'USD';
+      $('batch-input-root').value=queue.inputRoot||'';$('batch-output-root').value=queue.outputRoot||'';$('batch-destination').value=queue.destination||'zip';$('batch-unit-cost').value=queue.unitCost||'';$('batch-cost-unit').value=queue.costUnit||'USD';$('batch-workflow').value=queue.workflow||'generate';
       mode(true);message('Batch checkpoint restored. Reselect folders and enter keys if needed, then resume. Existing ZIP buffers are available below.');
     }
     if(!window.showDirectoryPicker){$('batch-destination').querySelector('[value=folder]').disabled=true;$('batch-destination').value='zip';}

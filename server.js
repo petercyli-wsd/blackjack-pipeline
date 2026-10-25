@@ -8,6 +8,7 @@ const {pipeline}=require('node:stream/promises');
 const {spawn}=require('node:child_process');
 const {METHODS,DEFAULT_PROMPT,validateOptions}=require('./src/models');
 const {probe,processVideos,createComparison}=require('./src/media');
+const {reviewOptions,reviewCandidate,runValidated}=require('./src/validation');
 const secret=()=>randomBytes(32).toString('hex');
 const equal=(a,b)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 const json=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
@@ -36,7 +37,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
   hosted=process.env.STUDIO_HOSTED==='true'||process.env.RENDER==='true',publicOrigin=process.env.PUBLIC_ORIGIN||process.env.RENDER_EXTERNAL_URL,
   teamPassword=process.env.TEAM_PASSWORD||'',sessionTtlMs=2*60*60*1000,keyTtlMs=8*60*60*1000,
   maxConcurrentJobs=Number(process.env.MAX_CONCURRENT_JOBS)||1,maxSessions=Number(process.env.MAX_SESSIONS)||10,
-  maxUploadBytes=512*1024*1024,jobTimeoutMs=60*60*1000,renderVideo=processVideos}={}){
+  maxUploadBytes=512*1024*1024,jobTimeoutMs=60*60*1000,renderVideo=processVideos,reviewVideo=reviewCandidate}={}){
   if(hosted&&(!publicOrigin||new URL(publicOrigin).protocol!=='https:'))throw new Error('Hosted mode requires an HTTPS PUBLIC_ORIGIN (or RENDER_EXTERNAL_URL).');
   if(hosted&&teamPassword.length<16)throw new Error('Hosted mode requires TEAM_PASSWORD with at least 16 characters.');
   let origin=hosted?new URL(publicOrigin).origin:null,closing=false,runningJobs=0;
@@ -66,7 +67,8 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
   }
   function credentials(s){if(Date.now()-s.keySetAt>keyTtlMs)s.keys={fal:'',kie:''};return {fal:!!s.keys.fal,kie:!!s.keys.kie};}
   function mediaURL(s,file){const id=randomUUID();s.media.set(id,file);return `/media/${id}`;}
-  function register(s,r){return {id:randomUUID(),url:mediaURL(s,r.output),preview:r.preview?mediaURL(s,r.preview):null,noBridgeUrl:r.noBridge?mediaURL(s,r.noBridge):null,noBridgePreview:r.noBridgePreview?mediaURL(s,r.noBridgePreview):null,frames:r.frames.map(f=>mediaURL(s,f)),duration:r.duration,fps:r.fps,fpsRational:r.fpsRational,bridgeDuration:r.bridgeDuration,bridgeFrames:r.bridgeFrames,noBridgeDuration:r.noBridgeDuration,width:r.width,height:r.height};}
+  function register(s,r){return {id:randomUUID(),url:mediaURL(s,r.output),preview:r.preview?mediaURL(s,r.preview):null,noBridgeUrl:r.noBridge?mediaURL(s,r.noBridge):null,noBridgePreview:r.noBridgePreview?mediaURL(s,r.noBridgePreview):null,frames:r.frames.map(f=>mediaURL(s,f)),duration:r.duration,fps:r.fps,fpsRational:r.fpsRational,bridgeDuration:r.bridgeDuration,bridgeFrames:r.bridgeFrames,noBridgeDuration:r.noBridgeDuration,width:r.width,height:r.height,review:r.review};}
+  function checkReview(s,o){const policy=reviewOptions(o.review);if(policy.mode!=='off'&&!s.keys.fal)throw Object.assign(new Error('Quality review requires your fal key. Enter it before starting.'),{status:428});if(policy.mode!=='off'&&o.method==='dissolve')throw new Error('Quality review currently supports inserted bridges; disable it for overlapping dissolves.');return policy;}
   function startJob(s,work,requestId){
     if(s.clearing)throw new Error('Results are being cleared. Try again in a moment.');
     if(requestId!==undefined&&(typeof requestId!=='string'||!/^[-a-zA-Z0-9]{1,80}$/.test(requestId)))throw new Error('Invalid render request reference.');
@@ -78,7 +80,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
     const log=msg=>{job.messages.push(redact(msg));if(job.messages.length>500){job.messages.shift();job.offset++;}};
     s.jobs.set(job.id,job);s.active=job;runningJobs++;
     const timer=setTimeout(()=>{job.timedOut=true;job.controller.abort();},jobTimeoutMs);timer.unref();
-    job.promise=(async()=>{try{job.result=register(s,await work(job.controller.signal,log,value=>{job.providerJob=value;}));job.state='complete';}catch(e){
+    job.promise=(async()=>{try{job.result=register(s,await work(job.controller.signal,log,value=>{job.providerJob=value;(job.providerJobs||=[]).push(value);}));job.state='complete';}catch(e){
       job.error=job.controller.signal.aborted?`${job.timedOut?'Time limit reached':'Cancelled locally'}. Submitted cloud jobs may still complete and incur charges.`:redact(e.message);job.state='failed';
     }finally{clearTimeout(timer);s.active=null;runningJobs--;s.lastSeen=Date.now();}})();return {id:job.id};
   }
@@ -104,10 +106,12 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
   async function latest(s,signal,log){
     const root=path.join(s.dir,'renders'),entries=await fs.readdir(root,{withFileTypes:true}).catch(()=>[]);
     for(const entry of entries.filter(e=>e.isDirectory()).sort((a,b)=>b.name.localeCompare(a.name))){
-      const dir=path.join(root,entry.name),output=path.join(dir,'result.mp4'),preview=path.join(dir,'preview.mp4'),frames=[path.join(dir,'start.png'),path.join(dir,'end.png')];
+      const rootDir=path.join(root,entry.name),review=await fs.readFile(path.join(rootDir,'review.json'),'utf8').then(JSON.parse).catch(()=>null);
+      const selected=review&&Number.isInteger(review.selectedAttempt)&&review.selectedAttempt>=0&&review.selectedAttempt<=2?review.selectedAttempt:null;
+      const dir=selected===null?rootDir:path.join(rootDir,`attempt-${selected}`),output=path.join(dir,'result.mp4'),preview=path.join(dir,'preview.mp4'),frames=[path.join(dir,'start.png'),path.join(dir,'end.png')];
       if(!(await Promise.all([output,preview,...frames,path.join(dir,'a.mp4'),path.join(dir,'b.mp4')].map(f=>fs.stat(f).then(s=>s.size>0).catch(()=>false)))).every(Boolean))continue;
       const info=await probe(output,signal),comparison=await createComparison(path.join(dir,'a.mp4'),path.join(dir,'b.mp4'),dir,signal,log);
-      return {output,preview,frames,...comparison,...info};
+      return {output,preview,frames,...comparison,...info,review};
     }throw new Error('No completed result in your current session. Create a transition first.');
   }
   async function sweep(){
@@ -157,14 +161,14 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
         if(route==='/api/keys'&&req.method==='DELETE'){s.keys={fal:'',kie:''};return json(res,200,credentials(s));}
         if((route==='/api/upload'||route==='/api/batch/upload')&&req.method==='POST'){
           const batch=route==='/api/batch/upload'?s.batch:null,slot=url.searchParams.get('slot');
-          if(route==='/api/batch/upload'&&(!batch||batch.rowId!==url.searchParams.get('rowId')||!['a','b'].includes(slot)))throw new Error('Invalid batch workspace or slot.');
+          if(route==='/api/batch/upload'&&(!batch||batch.rowId!==url.searchParams.get('rowId')||!['a','b','candidate'].includes(slot)))throw new Error('Invalid batch workspace or slot.');
           if(!batch&&s.batch)throw new Error('Finish or release the batch workspace first.');
           if(s.upload||s.active)throw new Error('Wait for your current upload or render to finish.');
           if(batch&&(batch.jobId||batch.uploads.has(slot)))throw new Error('This batch slot is already uploaded or submitted. Resume the existing row.');
           if(!batch&&s.uploads.size>=8)throw new Error('Session upload limit reached. Download your results and end this session to start fresh.');
           const id=randomUUID(),file=path.join(s.dir,batch?'batch':'uploads',`${id}.video`);let count=0;
           const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10*60*1000);timer.unref();
-          const limiter=new Transform({transform(chunk,encoding,done){count+=chunk.length;done(count>maxUploadBytes||(batch?batch.bytes:s.uploadBytes)+count>2*maxUploadBytes?new Error(`Upload limit: ${Math.round(maxUploadBytes/1024/1024)} MB per video, twice that per workspace.`):null,chunk);}});
+          const limiter=new Transform({transform(chunk,encoding,done){count+=chunk.length;done(count>maxUploadBytes||(batch?batch.bytes:s.uploadBytes)+count>(batch?3:2)*maxUploadBytes?new Error(`Upload limit: ${Math.round(maxUploadBytes/1024/1024)} MB per video, ${batch?3:2} videos per workspace.`):null,chunk);}});
           const task={controller};s.upload=task;
           task.promise=(async()=>{
             await fs.mkdir(path.dirname(file),{recursive:true});await pipeline(req,limiter,createWriteStream(file),{signal:controller.signal});
@@ -183,26 +187,30 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
           const a=batch.uploads.get('a'),b=batch.uploads.get('b');if(!a||!b)throw new Error('Upload both batch videos first.');
           const options={...o,a:a.file,b:b.file,aEnd:a.duration,bStart:0};
           const method=validateOptions(options),key=s.keys[method.provider];
-          if(method.provider!=='local'&&!key)throw Object.assign(new Error(`Enter your own ${method.provider} key before resuming the batch.`),{status:428});
+          const policy=checkReview(s,o),candidate=o.workflow==='existing'?batch.uploads.get('candidate')?.file:null;
+          if(o.workflow==='existing'&&(!candidate||policy.mode==='off'))throw new Error('Existing-output review requires an uploaded candidate and quality review enabled.');
+          if((!candidate||policy.mode==='redo')&&method.provider!=='local'&&!key)throw Object.assign(new Error(`Enter your own ${method.provider} key before resuming the batch.`),{status:428});
           const dir=path.join(s.dir,'batch','render');
-          const started=startJob(s,(signal,log,onProviderJob)=>renderVideo(options,{dir,key,signal,log,onProviderJob,outputOnly:true}));
+          const reviewKey=s.keys.fal;
+          const started=startJob(s,(signal,log,onProviderJob)=>runValidated(options,{dir,key,reviewKey,signal,log,onProviderJob,outputOnly:true,renderVideo,reviewVideo,candidate}));
           batch.jobId=started.id;return json(res,202,started);
         }
         if(route==='/api/process'&&req.method==='POST'){
           if(s.batch)throw new Error('Finish or release the batch workspace first.');
-          const o=await body(req),method=validateOptions(o);
+          const o=await body(req),method=validateOptions(o);checkReview(s,o);
           if(!s.uploads.has(o.a)||!s.uploads.has(o.b))throw new Error('Upload both videos in your own session first.');
           if(s.upload)throw new Error('Wait for your upload to finish.');
           if(s.renderCount>=5)throw new Error('Session render limit reached. Use Clear results in Review & export to discard old renders and free space. Download any results you want to keep first.');
           const key=s.keys[method.provider];if(method.provider!=='local'&&!key)throw new Error(`Enter your own ${method.provider} API key in Provider credentials first.`);
           const options={...o,a:s.uploads.get(o.a),b:s.uploads.get(o.b)},dir=path.join(s.dir,'renders',`${Date.now()}-${randomUUID().slice(0,8)}`);
-          const started=startJob(s,(signal,log)=>renderVideo(options,{dir,key,signal,log}),o.requestId);s.renderCount++;return json(res,202,started);
+          const reviewKey=s.keys.fal;
+          const started=startJob(s,(signal,log,onProviderJob)=>runValidated(options,{dir,key,reviewKey,signal,log,onProviderJob,renderVideo,reviewVideo}),o.requestId);s.renderCount++;return json(res,202,started);
         }
         if(route==='/api/latest'&&req.method==='POST'){if(s.batch)throw new Error('Finish or release the batch workspace first.');const o=await body(req);return json(res,202,startJob(s,(signal,log)=>latest(s,signal,log),o.requestId));}
         if(route==='/api/batch/cancel'&&req.method==='POST'){const {rowId}=await body(req);if(s.batch?.rowId!==rowId)throw new Error('Batch row changed.');if(s.batch.jobId)s.jobs.get(s.batch.jobId)?.controller.abort();s.upload?.controller.abort();return json(res,200,{});}
         if(route==='/api/cancel'&&req.method==='POST'){s.active?.controller.abort();return json(res,200,{});}
         if(route.startsWith('/api/jobs/')&&req.method==='GET'){
-          const j=s.jobs.get(route.slice('/api/jobs/'.length));if(!j)return json(res,404,{error:'Job not found in your session'});return json(res,200,{id:j.id,state:j.state,messages:j.messages,offset:j.offset,result:j.result,error:j.error,providerJob:j.providerJob});
+          const j=s.jobs.get(route.slice('/api/jobs/'.length));if(!j)return json(res,404,{error:'Job not found in your session'});return json(res,200,{id:j.id,state:j.state,messages:j.messages,offset:j.offset,result:j.result,error:j.error,providerJob:j.providerJob,providerJobs:j.providerJobs});
         }
         if(route==='/api/logout'&&req.method==='POST'){
           await endSession(s);res.setHeader('Set-Cookie',`studio_session=; Max-Age=0; HttpOnly; SameSite=Strict; Path=/${hosted?'; Secure':''}`);return json(res,200,{});

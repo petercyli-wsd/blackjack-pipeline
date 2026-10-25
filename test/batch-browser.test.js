@@ -25,6 +25,7 @@ function environment(){
       if(env.workspace.jobId)return json({id:env.workspace.jobId},202);
       env.calls++;env.submissions.push(value);const id=`job-${env.calls}`;env.workspace.jobId=id;
       env.jobs.set(id,{id,state:env.failed?'failed':env.pending?'running':'complete',error:env.failed,messages:['Working'],providerJob:{provider:'fal',requestId:`provider-${env.calls}`},result:{url:'/media/'+id,bridgeDuration:Math.round(value.duration*24)/24,bridgeFrames:Math.round(value.duration*24),fpsRational:'24/1'}});
+      if(env.review){env.jobs.get(id).result.review=env.review;env.jobs.get(id).providerJobs=[{provider:'fal',requestId:'review-request',phase:'review'}];}
       if(env.lostResponse){env.lostResponse=false;throw new TypeError('Network disconnected after submission');}
       return json({id},202);
     }
@@ -54,6 +55,41 @@ async function browser(env,{folder}={}){
   const state=async()=>new Promise((resolve,reject)=>{const request=env.indexedDB.open('dealer-transition-batches',1);request.onsuccess=()=>{const db=request.result,tx=db.transaction(['meta','rows']),r=tx.objectStore('meta').get('queue'),rows=tx.objectStore('rows').getAll();tx.oncomplete=()=>{db.close();resolve(r.result?{...r.result,rows:rows.result.sort((a,b)=>a.number-b.number)}:null);};tx.onerror=()=>reject(tx.error);};});
   return {w,$,load,selectFiles,state,close:()=>w.close()};
 }
+
+test('existing-folder review matches the CSV, uploads three files, uses only fal for review and checkpoints classified results',async()=>{
+  const env=environment();env.keys={fal:true,kie:false};env.review={verdict:'pass',summary:'No major issues',redoCount:0,attempts:[]};let b=await browser(env);
+  try{
+    b.$('batch-workflow').value='existing';b.$('batch-workflow').onchange();assert.equal(b.$('quality-mode').value,'review');assert.equal(b.$('batch-existing-wrap').hidden,false);
+    await b.load('first_half,second_half,output,method,duration\na.mp4,b.mp4,sub/one.mp4,kling-kie,3');
+    await b.$('batch-start').onclick();assert.match(b.$('batch-status').textContent,/existing output folder/);assert.equal(env.uploads,0);
+    Object.defineProperty(b.$('batch-existing-folder'),'files',{configurable:true,value:[{name:'one.mp4',size:10,lastModified:1,webkitRelativePath:'old/sub/one.mp4'}]});b.$('batch-existing-folder').onchange();
+    await b.$('batch-validate').onclick();await b.$('batch-start').onclick();
+    const q=await b.state();assert.equal(env.uploads,3);assert.equal(q.workflow,'existing');assert.equal(q.rows[0].state,'buffered');assert.equal(q.rows[0].savedName,'approved/sub/one.mp4');assert.equal(env.submissions[0].review.mode,'review');assert.equal(env.submissions[0].workflow,'existing');
+    b.$('batch-report').onclick();const report=await env.downloads.at(-1).text();assert.match(report,/quality_verdict/);assert.match(report,/approved\/sub\/one.mp4/);assert.match(report,/review-request/);
+    b.close();b=await browser(env);assert.equal(b.$('batch-workflow').value,'existing');assert.equal(b.$('batch-workflow').disabled,true);await b.$('batch-start').onclick();assert.equal(env.calls,1);
+  }finally{b.close();}
+});
+
+test('review errors preserve the completed video in needs-review and pause before the next row',async()=>{
+  const env=environment(),b=await browser(env);env.review={verdict:'needs_review',summary:'Reviewer service unavailable',redoCount:0,attempts:[],pauseBatch:true};
+  try{
+    b.$('quality-mode').value='redo';b.$('quality-retries').value='2';
+    await b.load('a.mp4,b.mp4,one.mp4\na.mp4,b.mp4,two.mp4');await b.$('batch-start').onclick();
+    let q=await b.state();assert.equal(q.rows[0].state,'buffered');assert.equal(q.rows[0].savedName,'needs-review/one.mp4');assert.equal(q.rows[1].state,'pending');assert.equal(env.calls,1);assert.equal(env.workspace,null);assert.match(b.$('batch-status').textContent,/Result saved under needs-review/);
+    env.review={verdict:'pass',summary:'Fine',redoCount:0,attempts:[]};b.$('quality-mode').value='off';b.$('quality-retries').value='0';await b.$('batch-start').onclick();
+    assert.equal(env.calls,2);assert.equal(env.submissions[1].review.mode,'redo');assert.equal(env.submissions[1].review.maxRetries,2);q=await b.state();assert.ok(q.rows.every(r=>r.state==='buffered'));assert.match(b.$('batch-metrics').textContent,/1 approved \| 1 need human review/);
+  }finally{b.close();}
+});
+
+test('review requires a fal key even for local generation and existing candidate changes are rejected before submission',async()=>{
+  const env=environment(),b=await browser(env);env.keys={fal:false,kie:true};
+  try{
+    b.$('method').value='blend';b.$('method').dispatchEvent(new b.w.Event('change'));b.$('quality-mode').value='review';await b.load('a.mp4,b.mp4,one.mp4');await b.$('batch-start').onclick();assert.equal(env.uploads,0);assert.match(b.$('batch-status').textContent,/fal key/);
+    env.keys.fal=true;b.$('batch-workflow').value='existing';b.$('batch-workflow').onchange();
+    const file={name:'one.mp4',size:10,lastModified:1,webkitRelativePath:'old/one.mp4'};Object.defineProperty(b.$('batch-existing-folder'),'files',{value:[file]});b.$('batch-existing-folder').onchange();await b.$('batch-validate').onclick();file.lastModified=2;await b.$('batch-start').onclick();
+    assert.equal(env.calls,0);assert.equal((await b.state()).rows[0].state,'invalid');assert.match((await b.state()).rows[0].error,/changed/);
+  }finally{b.close();}
+});
 
 test('batch estimates show before starting and respond to settings; single-result clearing and prompt restore work',async()=>{
   const env=environment(),b=await browser(env);
