@@ -129,7 +129,7 @@ async function processVideos(o,{dir,key,signal,log=()=>{},generator=generate,onP
   const manifest={method:m.id,duration:o.duration,fps,fpsRational:rate.rational,requestedFps:requested.source?'source':rate.rational,bridgeFrames:m.id==='dissolve'?null:bridgeFrames,bridgeDuration:m.id==='dissolve'?null:bridgeDuration,aEnd:o.aEnd,bStart:o.bStart,prompt:o.prompt,createdAt:new Date().toISOString()};
   const saveManifest=async job=>{Object.assign(manifest,{job});if(job)onProviderJob(job);await fs.writeFile(path.join(dir,'job.json'),JSON.stringify(manifest,null,2));};
   await saveManifest(null);
-  let joinStart=ai.duration;
+  let joinStart=ai.duration,actualBridge=null;
   if(m.id==='dissolve') {
     log('Crossfading moving clips and audio…'); joinStart=ai.duration-o.duration;
     await ff(['-i',a,'-i',b,'-filter_complex',`[0:v]settb=AVTB[v0];[1:v]settb=AVTB[v1];[v0][v1]xfade=transition=fade:duration=${o.duration}:offset=${joinStart}[v];[0:a][1:a]acrossfade=d=${o.duration}[au]`,'-map','[v]','-map','[au]',...encoding,...rateOptions(o.fps),output],signal);
@@ -147,16 +147,20 @@ async function processVideos(o,{dir,key,signal,log=()=>{},generator=generate,onP
     const speed=bridgeDuration/Math.max(1/info.fps,info.duration-1/info.fps);
     const timing=m.kind==='interpolation'?frameClock(o.fps):`setpts=${speed}*(PTS-STARTPTS)`;
     await ff(['-i',raw,'-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-filter_complex',`[0:v]${timing},${scale(w,h,o.fps)},tpad=stop_mode=clone:stop_duration=1[v]`,'-map','[v]','-map','1:a','-t',String(bridgeDuration),...encoding,...rateOptions(o.fps),bridge],signal);
+    actualBridge=await probe(bridge,signal);
     log('Joining A → bridge → B (silent bridge, source audio retained)…');
     await ff(['-i',a,'-i',bridge,'-i',b,'-filter_complex',`[0:a]afade=t=out:st=${Math.max(0,ai.duration-0.08)}:d=0.08[a0];[2:a]afade=t=in:d=0.08[a2];[0:v][a0][1:v][1:a][2:v][a2]concat=n=3:v=1:a=1[joined][au];[joined]${frameClock(o.fps)}[v]`,'-map','[v]','-map','[au]',...encoding,...rateOptions(o.fps),output],signal);
   }
-  if(outputOnly){const info=await probe(output,signal);return {output,frames,joinStart,duration:info.duration,fps:info.fps,fpsRational:info.fpsRational,width:w,height:h};}
+  const bridgeMetadata={bridgeFrames:actualBridge?.frameCount??null,bridgeDuration:actualBridge?.frameCount?actualBridge.frameCount/actualBridge.fps:actualBridge?.duration??null};
+  Object.assign(manifest,{actualBridgeFrames:bridgeMetadata.bridgeFrames,actualBridgeDuration:bridgeMetadata.bridgeDuration});
+  await fs.writeFile(path.join(dir,'job.json'),JSON.stringify(manifest,null,2));
+  if(outputOnly){const info=await probe(output,signal);return {output,frames,joinStart,...bridgeMetadata,duration:info.duration,fps:info.fps,fpsRational:info.fpsRational,width:w,height:h};}
   log('Rendering a short preview around the join…');
   const preview=path.join(dir,'preview.mp4');
   const previewStart=Math.max(0,joinStart-1.5);
   await ff(['-ss',String(previewStart),'-i',output,'-t',String(joinStart+o.duration+1.5-previewStart),...encoding,...rateOptions(o.fps),preview],signal);
   const comparison=await createComparison(a,b,dir,signal,log);
   const resultInfo=await probe(output,signal);
-  return {output,preview,...comparison,frames,joinStart,duration:resultInfo.duration,fps:resultInfo.fps,fpsRational:resultInfo.fpsRational,width:w,height:h};
+  return {output,preview,...comparison,frames,joinStart,...bridgeMetadata,duration:resultInfo.duration,fps:resultInfo.fps,fpsRational:resultInfo.fpsRational,width:w,height:h};
 }
 module.exports={ff,probe,processVideos,localBridge,extractBoundary,createComparison};

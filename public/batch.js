@@ -32,11 +32,13 @@
     });
   }
   function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),300000);}
+  const resolveRow=row=>BatchSettings.resolve(row,queue?.settings||ui.settings(),ui.methods());
+  function previewSettings(row){try{return resolveRow(row);}catch{return null;}}
   function report(){return BatchFormat.csv([
-    ['first_half','second_half','output','row','status','error','method','bridge_seconds','fps','elapsed_seconds','provider','provider_request_id','zip_part','previous_attempts'],
-    ...(queue?.rows||[]).map(r=>[r.first,r.second,r.output,r.number,r.state,r.error,queue.settings?.method,queue.settings?.duration,queue.settings?.fps,r.elapsed?.toFixed(1),r.providerJob?.provider,r.providerJob?.requestId,r.part,r.history?JSON.stringify(r.history):''].map(value=>typeof value==='string'&&/^[=+@\-\t\r]/.test(value)?"'"+value:value))
+    ['first_half','second_half','output','row','status','error','method','duration','setting_source','method_source','duration_source','bridge_seconds','actual_bridge_seconds','bridge_frames','fps','encoded_fps','elapsed_seconds','provider','provider_request_id','zip_part','previous_attempts'],
+    ...(queue?.rows||[]).map(r=>{const s=previewSettings(r);return [r.first,r.second,r.output,r.number,r.state,r.error,s?.method||r.csvMethod,s?.duration??r.csvDuration,s?.settingSource,s?.methodSource,s?.durationSource,s?.duration,r.result?.bridgeDuration,r.result?.bridgeFrames,(queue.settings||ui.settings()).fps,r.result?.fpsRational,r.elapsed?.toFixed(1),r.providerJob?.provider,r.providerJob?.requestId,r.part,r.history?JSON.stringify(r.history):''].map(value=>typeof value==='string'&&/^[=+@\-\t\r]/.test(value)?"'"+value:value);})
   ]);}
-  function mode(batch){if(running)return;document.body.classList.toggle('batch-mode',batch);$('batch-panel').hidden=!batch;$('mode-batch').setAttribute('aria-pressed',String(batch));$('mode-single').setAttribute('aria-pressed',String(!batch));}
+  function mode(batch){if(running)return;document.body.classList.toggle('batch-mode',batch);$('batch-panel').hidden=!batch;$('mode-batch').setAttribute('aria-pressed',String(batch));$('mode-single').setAttribute('aria-pressed',String(!batch));render();}
   $('mode-single').onclick=()=>mode(false);$('mode-batch').onclick=()=>mode(true);
   function render(){
     $('batch-csv').hidden=!!queue;
@@ -53,24 +55,34 @@
     $('batch-retry').disabled=running||editing||!queue?.rows.some(r=>retryStates.includes(r.state));
     $('batch-skip').disabled=running||editing||!queue?.rows.some(r=>['uncertain',...pauseStates].includes(r.state));
     for(const id of ['batch-report','batch-reset'])$(id).disabled=running||editing||!queue;
+    const settings=queue?.settings||ui.settings(),methods=ui.methods();
+    const groups=BatchSettings.groups(queue?.rows||[],settings,methods);
+    ui.setBatchContext({active:document.body.classList.contains('batch-mode'),hasGenerative:groups.some(g=>{const m=methods.find(m=>m.id===g.method);return m.provider!=='local'&&m.kind!=='interpolation';})});
+    $('batch-settings-summary').textContent=queue?`${queue.settings?'Frozen at first start':'Resolved settings (validate after changing defaults)'}: ${groups.slice(0,8).map(g=>`${g.rows} × ${g.method}, ${g.duration}s`).join('; ')||'No valid settings'}${groups.length>8?`; and ${groups.length-8} more groups (see row table/report)`:''}. FPS, movement instructions and mute are shared; movement instructions apply to generative rows.`:'';
+    $('batch-csv-warning').textContent=(queue?.warnings||[]).join(' ');
     if(!queue){$('batch-estimate').textContent='Load a CSV to see estimated time and provider cost before starting.';$('batch-estimate-basis').textContent='';return;}
     const counts={};for(const r of queue.rows)counts[r.state]=(counts[r.state]||0)+1;
     const complete=(counts.saved||0)+(counts.buffered||0);
-    const settings=queue.settings||ui.settings(),remaining=queue.rows.filter(r=>!['saved','buffered','skipped','discarded'].includes(r.state)).length;
-    const samples=queue.rows.filter(r=>['saved','buffered'].includes(r.state)).map(r=>r.elapsed);
-    const estimate=window.BatchEstimates.estimate({...settings,rows:remaining,unitCost:$('batch-unit-cost').value,unit:$('batch-cost-unit').value,samples});
-    if(estimate){
+    const remainingRows=queue.rows.filter(r=>!['saved','buffered','skipped','discarded','invalid'].includes(r.state));
+    const pendingGroups=BatchSettings.groups(remainingRows,settings,methods),remaining=pendingGroups.reduce((n,g)=>n+g.rows,0);
+    const samples=queue.rows.filter(r=>['saved','buffered','discarded'].includes(r.state)).map(r=>({...previewSettings(r),elapsed:r.elapsed}));
+    const mixed=groups.length>1;
+    for(const id of ['batch-unit-cost','batch-cost-unit'])$(id).disabled=running||editing||mixed;
+    const estimate=window.BatchEstimates.aggregate(pendingGroups,{unitCost:mixed?'':$('batch-unit-cost').value,unit:$('batch-cost-unit').value,samples});
+    if(groups.length){
       const time=seconds=>seconds<3600?`${Math.ceil(seconds/60)} min`:`${(seconds/3600).toFixed(1)} hr`;
       const cost=value=>estimate.unit==='USD'?`$${value.toFixed(2)}`:`${value.toFixed(2)} ${estimate.unit}`;
-      $('batch-estimate').textContent=`${queue.settings?'Locked batch':'Selected'}: ${settings.method}, ${settings.duration}s bridge. For ${remaining} unfinished rows:\nApproximately ${time(estimate.time[0])} to ${time(estimate.time[1])}; provider cost ${cost(estimate.cost[0])} to ${cost(estimate.cost[1])}.\n${estimate.measured?'Time range based on recent completed rows.':'Speculative time range available before starting.'} Planning estimates, not a quote or spending cap; actual totals can fall outside these ranges.`;
-      $('batch-estimate-basis').textContent=estimate.basis+' Unfinished includes invalid/failed rows if you fix and retry them. Excludes past charges, retries, taxes and hosting charges. Time assumes continuous running; ZIP confirmations and sleep add delays.';
+      const description=groups.length===1?`${groups[0].method}, ${groups[0].duration}s bridge`:'Mixed methods / durations';
+      $('batch-estimate').textContent=`${queue.settings?'Locked batch':'Selected'}: ${description}. For ${remaining} unfinished rows with valid settings:\nApproximately ${time(estimate.time[0])} to ${time(estimate.time[1])}; provider cost ${cost(estimate.cost[0])} to ${cost(estimate.cost[1])}.\n${estimate.parts.slice(0,8).map(p=>`${p.rows} × ${p.method}, ${p.duration}s: ${time(p.time[0])}–${time(p.time[1])}, ${cost(p.cost[0])}–${cost(p.cost[1])}`).join('\n')}${estimate.parts.length>8?`\nPlus ${estimate.parts.length-8} more groups, included in totals.`:''}\n${estimate.measured?'Time uses recent completions of the same method and duration where available.':'Speculative time range available before starting.'} Planning estimates, not a quote or spending cap; actual totals can fall outside these ranges.`;
+      $('batch-estimate-basis').textContent=[...new Set(estimate.parts.map(p=>p.basis))].join(' ')+' '+(mixed?'A single per-row cost override is disabled for mixed settings; each group uses its own automatic range. ':'')+'Invalid/skipped rows and past charges are excluded. Failed rows assume one retry. Excludes extra retries, taxes and hosting charges. Time assumes continuous running; ZIP confirmations and sleep add delays.';
     }else{$('batch-estimate').textContent='Choose a valid method and duration to see estimates.';$('batch-estimate-basis').textContent='';}
     $('batch-metrics').textContent=`${complete} / ${queue.rows.length} outputs saved or buffered | ${counts.pending||0} pending | ${(counts.invalid||0)+(counts.failed||0)+(counts.cancelled||0)+(counts.skipped||0)} skipped/failed | ${counts.discarded||0} discarded | ${counts.uncertain||0} need review\n${buffered.length} files / ${(buffered.reduce((sum,x)=>sum+x.blob.size,0)/1048576).toFixed(1)} MB buffered for ZIP part ${queue.part}`;
     $('batch-progress').max=queue.rows.length;$('batch-progress').value=queue.rows.filter(r=>terminal.includes(r.state)).length;
     page=Math.max(0,Math.min(page,Math.ceil(queue.rows.length/50)-1));const start=page*50;
     $('batch-rows').replaceChildren();
     for(const row of queue.rows.slice(start,start+50)){
-      const tr=document.createElement('tr');for(const text of [row.number,row.name||row.output,`${row.state}${row.error?' — '+row.error:''}${row.providerJob?.requestId?' · Request '+row.providerJob.requestId:''}`]){const td=document.createElement('td');td.textContent=text;tr.append(td);}$('batch-rows').append(tr);
+      const s=previewSettings(row);
+      const tr=document.createElement('tr');for(const text of [row.number,row.name||row.output,s?`${s.method} · ${s.duration}s (${s.settingSource})`:'Invalid settings',`${row.state}${row.error?' — '+row.error:''}${row.providerJob?.requestId?' · Request '+row.providerJob.requestId:''}`]){const td=document.createElement('td');td.textContent=text;tr.append(td);}$('batch-rows').append(tr);
     }
     $('batch-page').textContent=`${start+1}–${Math.min(start+50,queue.rows.length)} of ${queue.rows.length}`;
     $('batch-prev').disabled=page===0;$('batch-next').disabled=start+50>=queue.rows.length;
@@ -79,11 +91,12 @@
   function findFile(name){return files.get(name)||(/^[a-z]:|^\\\\/i.test($('batch-input-root').value)?foldedFiles.get(name.toLowerCase()):null);}
   function match(){
     if(!queue)throw new Error('Upload a CSV first.');
-    const prepared=BatchFormat.prepare(queue.rows.map(r=>r.fields),$('batch-input-root').value,$('batch-output-root').value);
+    const prepared=BatchFormat.prepare(queue.rows.map(r=>r.fields),$('batch-input-root').value,$('batch-output-root').value,queue.columns);
     for(let i=0;i<queue.rows.length;i++){
       const row=queue.rows[i];if(!['pending','invalid'].includes(row.state))continue;
       Object.assign(row,prepared[i]);
       if(row.state==='invalid')continue;
+      try{resolveRow(row);}catch(e){row.state='invalid';row.error=e.message;continue;}
       for(const [slot,key] of [['a','signatureA'],['b','signatureB']]){
         const file=findFile(row[slot]);
         if(!file){row.state='invalid';row.error=`Missing or ambiguous source: ${row[slot]}`;break;}
@@ -106,12 +119,12 @@
       if(queue)throw new Error('Use Clear CSV beside the loaded filename before importing a new CSV.');
       const file=$('batch-csv').files[0];if(!file)return;if(file.size>20*1048576)throw new Error('CSV limit: 20 MB.');
       const records=BatchFormat.parseCSV(await file.text());
-      queue={id:crypto.randomUUID(),csvName:file.name,created:new Date().toISOString(),part:1,inputRoot:$('batch-input-root').value,outputRoot:$('batch-output-root').value,rows:BatchFormat.prepare(records,$('batch-input-root').value,$('batch-output-root').value).map((r,i)=>({...r,id:crypto.randomUUID(),fields:records[i]}))};
+      queue={id:crypto.randomUUID(),csvName:file.name,columns:records.columns,warnings:records.warnings,created:new Date().toISOString(),part:1,inputRoot:$('batch-input-root').value,outputRoot:$('batch-output-root').value,rows:BatchFormat.prepare(records,$('batch-input-root').value,$('batch-output-root').value).map((r,i)=>({...r,id:crypto.randomUUID(),fields:records[i]}))};
       if(files.size)match();await checkpoint({allRows:true});render();message('CSV loaded. Validate file matching, choose the method and destination, then start.');
     }catch(e){queue=previousQueue;message(e.message,true);}finally{$('batch-csv').value='';render();}
   };
-  $('batch-validate').onclick=async()=>{try{match();await checkpoint({allRows:true});message('Validation complete. Invalid rows will be skipped; review their errors below.');}catch(e){message(e.message,true);}};
-  $('batch-template').onclick=()=>download(new Blob(['first_half,second_half,output\r\n"table-01/first.mp4","table-01/second.mp4","table-01/combined.mp4"\r\n'],{type:'text/csv'}),'batch-example.csv');
+  $('batch-validate').onclick=async()=>{try{match();await checkpoint({allRows:true});message(`Validation complete: ${queue.rows.filter(r=>r.state==='pending').length} ready, ${queue.rows.filter(r=>r.state==='invalid').length} invalid. Invalid rows will be skipped; review their errors below.`);}catch(e){message(e.message,true);}};
+  $('batch-template').onclick=()=>download(new Blob(['first_half,second_half,output,method,duration\r\ntable-01/first.mp4,table-01/second.mp4,film.mp4,film,0.33\r\ntable-02/first.mp4,table-02/second.mp4,kling.mp4,kling-fal,3\r\ntable-03/first.mp4,table-03/second.mp4,panel.mp4,,\r\n'],{type:'text/csv'}),'batch-example.csv');
   $('batch-destination').onchange=()=>{render();$('batch-destination-info').textContent=$('batch-destination').value==='folder'?(destination?`Output folder: ${destination.name}`:'Choose a dedicated empty output folder.'):'ZIPs keep relative output folders and filenames.';};
   $('batch-output-folder').onclick=async()=>{try{destination=await window.showDirectoryPicker({mode:'readwrite',id:'studio-batch-output'});$('batch-destination-info').textContent=`Output folder: ${destination.name}`;}catch(e){if(e.name!=='AbortError')message(e.message,true);}};
   for(const id of ['batch-unit-cost','batch-cost-unit'])$(id).oninput=()=>{render();};
@@ -186,7 +199,7 @@
       checkCancelled();row.state='submitting';await checkpoint({row});
       while(true){
         checkCancelled();
-        try{const submitted=await api('/api/batch/process','POST',{...queue.settings,rowId:row.attempt});workspace.jobId=submitted.id;break;}
+        try{const s=resolveRow(row);const submitted=await api('/api/batch/process','POST',{...queue.settings,method:s.method,duration:s.duration,rowId:row.attempt});workspace.jobId=submitted.id;break;}
         catch(e){if(e.status!==429)throw e;message(`Row ${row.number}: waiting for the team's render slot...`);await wait(5000);}
       }
     }
@@ -211,12 +224,15 @@
       if(!queue.settings){match();await checkpoint({allRows:true});}else ui.restoreSettings(queue.settings);
       const settings=queue.settings||ui.settings();
       window.StudioFrameRate.parse(settings.fps,true);
-      const init=await window.studio.init(),method=init.methods.find(m=>m.id===settings.method);
-      if(!method)throw new Error('The selected method is no longer available.');
-      if(method.provider!=='local'&&!init.keys[method.provider])throw new Error(`Enter your ${method.provider} key above and resume.`);
-      const d=settings.duration;if(!Number.isFinite(d)||d<method.min||d>method.max||(method.provider!=='local'&&method.kind!=='interpolation'&&!Number.isInteger(d)))throw new Error('Choose a transition duration within the selected method limits.');
+      const init=await window.studio.init();
+      const needed=queue.rows.filter(r=>['pending',...pauseStates].includes(r.state));
+      // Resolve every runnable row before any upload or checkpoint freeze.
+      for(const row of needed)BatchSettings.resolve(row,settings,init.methods);
+      const missing=BatchSettings.missingKeys(needed,settings,init.methods,init.keys);
+      if(missing.length)throw new Error(`Missing provider keys — ${missing.join('; ')}. Enter these keys above, then resume. No videos were uploaded.`);
+      for(const row of queue.rows)if(!row.resolvedSettings){try{row.resolvedSettings=BatchSettings.resolve(row,settings,init.methods);}catch{/* Invalid rows remain skipped, with the original validation error. */}}
       queue.settings=settings;
-      queue.destination=$('batch-destination').value;queue.unitCost=$('batch-unit-cost').value;queue.costUnit=$('batch-cost-unit').value;await checkpoint();
+      queue.destination=$('batch-destination').value;queue.unitCost=$('batch-unit-cost').value;queue.costUnit=$('batch-cost-unit').value;await checkpoint({allRows:true});
       await cleanPrevious();
       if(queue.rows.some(r=>r.state==='uncertain'))throw new Error('Review interrupted rows, then explicitly retry or skip them before continuing.');
       while(!stopAfter){

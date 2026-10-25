@@ -66,7 +66,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
   }
   function credentials(s){if(Date.now()-s.keySetAt>keyTtlMs)s.keys={fal:'',kie:''};return {fal:!!s.keys.fal,kie:!!s.keys.kie};}
   function mediaURL(s,file){const id=randomUUID();s.media.set(id,file);return `/media/${id}`;}
-  function register(s,r){return {id:randomUUID(),url:mediaURL(s,r.output),preview:r.preview?mediaURL(s,r.preview):null,noBridgeUrl:r.noBridge?mediaURL(s,r.noBridge):null,noBridgePreview:r.noBridgePreview?mediaURL(s,r.noBridgePreview):null,frames:r.frames.map(f=>mediaURL(s,f)),duration:r.duration,fps:r.fps,fpsRational:r.fpsRational,noBridgeDuration:r.noBridgeDuration,width:r.width,height:r.height};}
+  function register(s,r){return {id:randomUUID(),url:mediaURL(s,r.output),preview:r.preview?mediaURL(s,r.preview):null,noBridgeUrl:r.noBridge?mediaURL(s,r.noBridge):null,noBridgePreview:r.noBridgePreview?mediaURL(s,r.noBridgePreview):null,frames:r.frames.map(f=>mediaURL(s,f)),duration:r.duration,fps:r.fps,fpsRational:r.fpsRational,bridgeDuration:r.bridgeDuration,bridgeFrames:r.bridgeFrames,noBridgeDuration:r.noBridgeDuration,width:r.width,height:r.height};}
   function startJob(s,work,requestId){
     if(s.clearing)throw new Error('Results are being cleared. Try again in a moment.');
     if(requestId!==undefined&&(typeof requestId!=='string'||!/^[-a-zA-Z0-9]{1,80}$/.test(requestId)))throw new Error('Invalid render request reference.');
@@ -213,7 +213,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
       if(route.startsWith('/media/')&&['GET','HEAD'].includes(req.method)){
         const file=s?.media.get(route.slice('/media/'.length));if(!file)return json(res,404,{error:'Media not found in your session'});return await sendFile(req,res,file,url.searchParams.get('download')==='1');
       }
-      const staticFiles={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/renderer.js':'renderer.js','/browser.js':'browser.js','/frame-rate.js':'frame-rate.js','/batch.js':'batch.js','/batch-estimates.js':'batch-estimates.js','/batch-format.js':'batch-format.js','/batch-zip.js':'batch-zip.js'};
+      const staticFiles={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/renderer.js':'renderer.js','/browser.js':'browser.js','/frame-rate.js':'frame-rate.js','/batch.js':'batch.js','/batch-estimates.js':'batch-estimates.js','/batch-settings.js':'batch-settings.js','/batch-format.js':'batch-format.js','/batch-zip.js':'batch-zip.js'};
       if(staticFiles[route]&&req.method==='GET'){
         const name=staticFiles[route],types={html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8'};
         res.writeHead(200,{'Content-Type':types[name.split('.').at(-1)],'Cache-Control':'no-store'});res.end(await fs.readFile(path.join(__dirname,'public',name)));return;

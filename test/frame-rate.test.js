@@ -48,6 +48,8 @@ test('fractional exports preserve constant frame timestamps, source frame counts
       assert.equal(await checkClock(result.noBridge,target),48);
       const manifest=JSON.parse(await fs.readFile(path.join(renderDir,'job.json'),'utf8'));
       assert.equal(manifest.fpsRational,target);assert.equal(manifest.bridgeFrames,7);
+      assert.equal(result.bridgeFrames,7);assert.equal(result.bridgeDuration,7/(24000/1001));
+      assert.equal(manifest.duration,.3);assert.equal(manifest.actualBridgeDuration,result.bridgeDuration);
     }
   }
 });

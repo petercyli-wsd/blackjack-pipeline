@@ -1,6 +1,6 @@
 ﻿const $=id=>document.getElementById(id);
 let methods=[],clips={},result=null,busy=false,importing=false,keyReady={fal:false,kie:false};
-let reviewMode='preview',defaultPrompt='';
+let reviewMode='preview',defaultPrompt='',batchContext={active:false,hasGenerative:false};
 const selectedMethod=()=>methods.find(m=>m.id===$('method').value);
 const hasPendingKeys=()=>!!($('fal-key').value.trim()||$('kie-key').value.trim());
 const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);};
@@ -44,9 +44,15 @@ function methodChange(){
   const frames=m.kind==='interpolation';
   $('method-help').textContent=m.help;
   $('duration').min=m.min;$('duration').max=m.max;$('duration').step=m.provider==='local'||frames?'0.1':'1';$('duration').value=m.defaultDuration;
-  $('prompt-wrap').hidden=m.provider==='local'||frames;
+  updateBatchContext();
   $('timing').textContent=m.id==='dissolve'?'Overlaps A and B by this duration, shortening the full video.':`Inserts a ${frames?'frame-interpolated':'generated'} bridge between A and B. Its duration is added to the full video.`;
   readiness();
+}
+function updateBatchContext(){
+  const m=selectedMethod();
+  $('method-label').textContent=batchContext.active?'Default method (CSV may override)':'Interpolation method';
+  $('duration-label').textContent=batchContext.active?'Default transition (seconds)':'Transition (seconds)';
+  $('prompt-wrap').hidden=!(batchContext.active&&batchContext.hasGenerative)&&(!m||m.provider==='local'||m.kind==='interpolation');
 }
 function keyStatus(k){
   keyReady={fal:!!k.fal,kie:!!k.kie};
@@ -159,7 +165,8 @@ window.studio.init().then(data=>{
 }).catch(fail);
 readiness();
 window.studioUI={
-  isBusy:()=>busy||importing,lock:setBusy,applyKeys,
+  isBusy:()=>busy||importing,lock:setBusy,applyKeys,methods:()=>methods,
+  setBatchContext:context=>{batchContext=context;updateBatchContext();},
   settings:()=>({method:$('method').value,duration:Number($('duration').value),fps:$('fps').value.trim(),prompt:$('prompt').value,mute:$('mute').checked}),
   restoreSettings:o=>{$('method').value=o.method;methodChange();for(const id of ['duration','fps','prompt'])$(id).value=o[id];$('mute').checked=o.mute;readiness();}
 };

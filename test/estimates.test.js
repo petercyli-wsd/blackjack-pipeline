@@ -1,6 +1,17 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const {estimate}=require('../public/batch-estimates');
+const {estimate,aggregate}=require('../public/batch-estimates');
+
+test('mixed estimates sum distinct methods/durations, reject blanket overrides and use matching time samples',()=>{
+  const groups=[{method:'film',duration:.33,rows:41},{method:'film',duration:.67,rows:123},{method:'kling-fal',duration:3,rows:4},{method:'blend',duration:.3,rows:2}];
+  const result=aggregate(groups,{unitCost:999,unit:'credits',samples:[{method:'film',duration:.33,elapsed:10}]});
+  assert.equal(result.unit,'USD');assert.equal(result.parts[0].measured,1);assert.equal(result.parts[1].measured,0);assert.equal(result.parts[2].measured,0);
+  assert.deepEqual(result.parts[3].cost,[0,0]);assert.equal(result.parts[0].cost[0],.005*41);
+  assert.equal(result.cost[0],result.parts.reduce((sum,p)=>sum+p.cost[0],0));
+  assert.equal(result.time[0],result.parts.reduce((sum,p)=>sum+p.time[0],0));
+  assert.deepEqual(aggregate([groups[0]],{unitCost:2,unit:'credits'}).cost,[82,82]);
+  assert.deepEqual(aggregate([]).time,[0,0]);
+});
 test('preflight estimates cover every method, scale with rows/duration and accept manual costs',()=>{
   for(const method of ['film','rife','kling-fal','kling-kie','seedance','flow','blend','dissolve']){
     const e=estimate({method,duration:4,rows:871});assert.ok(e);assert.ok(e.time[0]>0);assert.ok(e.time[1]>=e.time[0]);assert.ok(e.cost[0]>=0);assert.equal(e.measured,0);

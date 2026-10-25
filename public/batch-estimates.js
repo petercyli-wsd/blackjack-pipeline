@@ -21,5 +21,12 @@
     const perRow=manual?[Number(unitCost),Number(unitCost)]:cost;
     return {time:seconds.map(n=>n*rows),cost:perRow.map(n=>n*rows),perRow,unit:manual?unit:'USD',measured:completed.length,basis:manual?'Your per-row cost override.':p.basis};
   }
-  const api={estimate};if(typeof module==='object'&&module.exports)module.exports=api;else root.BatchEstimates=api;
+  function aggregate(groups,{unitCost='',unit='USD',samples=[]}={}){
+    const mixed=groups.length>1;
+    const bySettings=new Map();
+    for(const sample of samples){const key=`${sample.method}:${sample.duration}`;if(!bySettings.has(key))bySettings.set(key,[]);bySettings.get(key).push(sample.elapsed);}
+    const parts=groups.map(group=>({...group,...estimate({...group,unitCost:mixed?'':unitCost,unit,samples:bySettings.get(`${group.method}:${group.duration}`)||[]})}));
+    return {parts,mixed,time:[0,1].map(i=>parts.reduce((n,p)=>n+p.time[i],0)),cost:[0,1].map(i=>parts.reduce((n,p)=>n+p.cost[i],0)),unit:mixed?'USD':parts[0]?.unit||'USD',measured:parts.some(p=>p.measured)};
+  }
+  const api={estimate,aggregate};if(typeof module==='object'&&module.exports)module.exports=api;else root.BatchEstimates=api;
 })(globalThis);

@@ -10,21 +10,21 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const publicDir=path.join(__dirname,'../public');
 async function until(check){for(let i=0;i<300;i++){if(await check())return;await delay(10);}throw new Error('Condition timed out');}
 function environment(){
-  const env={indexedDB:new IDBFactory(),workspace:null,jobs:new Map(),calls:0,lostResponse:false,pending:false,downloads:[],locked:false};
+  const env={indexedDB:new IDBFactory(),workspace:null,jobs:new Map(),calls:0,submissions:[],uploads:0,keys:{fal:true,kie:true},lostResponse:false,pending:false,downloads:[],locked:false};
   env.fetch=async(url,options={})=>{
     const route=new URL(url,'http://studio.test'),method=options.method||'GET',value=typeof options.body==='string'?JSON.parse(options.body):{};
     const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
     if(route.pathname==='/api/session')return json({token:'session-token'});
-    if(route.pathname==='/api/init'){if(env.initDelay)await delay(env.initDelay);return json({methods:METHODS,prompt:DEFAULT_PROMPT,keys:{fal:true,kie:true},maxUploadBytes:512*1048576,hosted:true});}
-    if(route.pathname==='/api/keys')return json({fal:true,kie:true});
+    if(route.pathname==='/api/init'){if(env.initDelay)await delay(env.initDelay);return json({methods:METHODS,prompt:DEFAULT_PROMPT,keys:env.keys,maxUploadBytes:512*1048576,hosted:true});}
+    if(route.pathname==='/api/keys')return json(env.keys);
     if(route.pathname==='/api/results'&&method==='DELETE'){if(env.clearError)return json({error:env.clearError},409);env.cleared=(env.cleared||0)+1;return json({cleared:true});}
     if(route.pathname==='/api/batch')return json(env.workspace||{});
     if(route.pathname==='/api/batch/row'){env.workspace={rowId:value.rowId,uploads:{},jobId:null};return json({rowId:value.rowId});}
-    if(route.pathname==='/api/batch/upload'){env.workspace.uploads[route.searchParams.get('slot')]={duration:1};return json({duration:1});}
+    if(route.pathname==='/api/batch/upload'){env.uploads++;env.workspace.uploads[route.searchParams.get('slot')]={duration:1};return json({duration:1});}
     if(route.pathname==='/api/batch/process'){
       if(env.workspace.jobId)return json({id:env.workspace.jobId},202);
-      env.calls++;const id=`job-${env.calls}`;env.workspace.jobId=id;
-      env.jobs.set(id,{id,state:env.failed?'failed':env.pending?'running':'complete',error:env.failed,messages:['Working'],providerJob:{provider:'fal',requestId:`provider-${env.calls}`},result:{url:'/media/'+id}});
+      env.calls++;env.submissions.push(value);const id=`job-${env.calls}`;env.workspace.jobId=id;
+      env.jobs.set(id,{id,state:env.failed?'failed':env.pending?'running':'complete',error:env.failed,messages:['Working'],providerJob:{provider:'fal',requestId:`provider-${env.calls}`},result:{url:'/media/'+id,bridgeDuration:Math.round(value.duration*24)/24,bridgeFrames:Math.round(value.duration*24),fpsRational:'24/1'}});
       if(env.lostResponse){env.lostResponse=false;throw new TypeError('Network disconnected after submission');}
       return json({id},202);
     }
@@ -45,7 +45,7 @@ async function browser(env,{folder}={}){
   if(folder)w.showDirectoryPicker=async()=>folder;
   // Avoid 1.5-second polling waits; preserve asynchronous ordering.
   const timeout=w.setTimeout.bind(w);w.setTimeout=(fn,ms,...args)=>timeout(fn,ms===1500||ms===5000?1:ms,...args);
-  for(const name of ['browser.js','frame-rate.js','renderer.js','batch-format.js','batch-zip.js','batch-estimates.js','batch.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
+  for(const name of ['browser.js','frame-rate.js','renderer.js','batch-format.js','batch-settings.js','batch-zip.js','batch-estimates.js','batch.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
   await until(()=>$('method').options.length===METHODS.length&&!$('batch-csv').disabled).catch(e=>{throw new Error(`${e.message}: ${$('batch-status').textContent}; ${$('status').textContent}; methods=${$('method').options.length}`);});
   const selectFiles=()=>{
     Object.defineProperty($('batch-folder'),'files',{configurable:true,value:['a.mp4','b.mp4'].map(name=>({name,size:10,lastModified:1,webkitRelativePath:'videos/'+name}))});$('batch-folder').onchange();
@@ -221,4 +221,60 @@ test('browser storage failure retains the completed server result and retries sa
     await b.$('batch-start').onclick();assert.equal(env.calls,1);assert.equal((await b.state()).rows[0].state,'saving');assert.ok(env.workspace);assert.match(b.$('batch-status').textContent,/checkpoint the output/);
     await b.$('batch-start').onclick();assert.equal(env.calls,1);assert.equal((await b.state()).rows[0].state,'buffered');assert.equal(env.workspace,null);
   }finally{IDBObjectStore.prototype.put=original;b.close();}
+});
+
+test('mixed CSV validates bad settings per row, blocks all uploads for missing keys and reports actual durations',async()=>{
+  const env=environment(),b=await browser(env);env.keys={fal:false,kie:false};
+  try{
+    await b.load('OUTPUT,first_half,second_half,METHOD,DURATION,score\nfilm.mp4,a.mp4,b.mp4,FiLm,.33,10\nkling.mp4,a.mp4,b.mp4,kling-fal,3,20\nkie.mp4,a.mp4,b.mp4,kling-kie,3,30\nlocal.mp4,a.mp4,b.mp4,blend,.3,40\nbad.mp4,a.mp4,b.mp4,nope,.4,50\nlong.mp4,a.mp4,b.mp4,film,5,60\nfraction.mp4,a.mp4,b.mp4,seedance,4.5,70');
+    b.$('mode-batch').onclick();await b.$('batch-validate').onclick();
+    assert.match(b.$('batch-status').textContent,/4 ready, 3 invalid/);
+    assert.match(b.$('batch-csv-warning').textContent,/Ignored CSV columns: score/);
+    assert.equal(b.$('prompt-wrap').hidden,false);assert.match(b.$('method-label').textContent,/Default method/);
+    assert.equal(b.$('batch-unit-cost').disabled,true);assert.match(b.$('batch-estimate').textContent,/1 × kling-fal, 3s/);
+    b.$('prompt').value='Only the right hand moves one card.';
+    await b.$('batch-start').onclick();
+    assert.match(b.$('batch-status').textContent,/fal: film \(1 row\), kling-fal \(1 row\)/);assert.match(b.$('batch-status').textContent,/kie: kling-kie \(1 row\)/);
+    assert.equal(env.uploads,0);assert.equal(env.calls,0);assert.equal((await b.state()).settings,undefined);
+    env.keys.fal=true;await b.$('batch-start').onclick();assert.match(b.$('batch-status').textContent,/kie: kling-kie/);assert.equal(env.uploads,0);
+    env.keys.kie=true;await b.$('batch-start').onclick();
+    assert.deepEqual(env.submissions.map(s=>[s.method,s.duration]),[['film',.33],['kling-fal',3],['kling-kie',3],['blend',.3]]);
+    assert.ok(env.submissions.every(s=>s.prompt==='Only the right hand moves one card.'));
+    const q=await b.state();assert.equal(q.rows.filter(r=>r.state==='invalid').length,3);assert.equal(q.rows[0].resolvedSettings.duration,.33);
+    b.$('batch-report').onclick();const report=await env.downloads.at(-1).text();
+    assert.match(report,/"method","duration","setting_source","method_source","duration_source"/);
+    const rows=report.split('\r\n').map(s=>s.split(',').map(x=>x.replace(/^"|"$/g,''))),header=rows[0];
+    assert.equal(rows[1][header.indexOf('method')],'film');assert.equal(rows[1][header.indexOf('duration')],'0.33');assert.equal(rows[1][header.indexOf('setting_source')],'csv');
+    assert.equal(Number(rows[1][header.indexOf('actual_bridge_seconds')]),8/24);assert.equal(rows[1][header.indexOf('bridge_frames')],'8');
+    b.$('mode-single').onclick();assert.equal(b.$('prompt-wrap').hidden,true);assert.equal(b.$('method-label').textContent,'Interpolation method');
+  }finally{b.close();}
+});
+
+test('mixed queue freezes row overrides and shared settings across pause, refresh and changed panel defaults',async()=>{
+  const env=environment();env.pending=true;let b=await browser(env);
+  try{
+    b.$('method').value='blend';b.$('method').dispatchEvent(new b.w.Event('change'));b.$('duration').value='.7';b.$('fps').value='24';b.$('prompt').value='Frozen prompt';b.$('mute').checked=true;
+    await b.load('first_half,second_half,output,method,duration\na.mp4,b.mp4,one.mp4,,\na.mp4,b.mp4,two.mp4,film,.33\na.mp4,b.mp4,three.mp4,kling-fal,');
+    const running=b.$('batch-start').onclick();await until(()=>env.calls===1);b.$('batch-pause').onclick();env.jobs.get('job-1').state='complete';await running;
+    let q=await b.state();assert.deepEqual(q.rows.map(r=>[r.resolvedSettings.method,r.resolvedSettings.duration,r.resolvedSettings.settingSource]),[['blend',.7,'panel'],['film',.33,'csv'],['kling-fal',3,'method default']]);
+    b.close();env.pending=false;b=await browser(env);b.selectFiles();
+    b.$('method').value='seedance';b.$('method').dispatchEvent(new b.w.Event('change'));b.$('duration').value=8;b.$('fps').value='30';b.$('prompt').value='Changed';b.$('mute').checked=false;
+    await b.$('batch-validate').onclick();await b.$('batch-start').onclick();
+    assert.deepEqual(env.submissions.map(s=>[s.method,s.duration,s.fps,s.prompt,s.mute]),[['blend',.7,'24','Frozen prompt',true],['film',.33,'24','Frozen prompt',true],['kling-fal',3,'24','Frozen prompt',true]]);
+    q=await b.state();assert.ok(q.rows.every(r=>r.state==='buffered'));assert.equal(env.calls,3);
+  }finally{b.close();}
+});
+
+test('legacy checkpoints without per-row settings resume using their original panel settings',async()=>{
+  const env=environment();env.pending=true;let b=await browser(env);
+  try{
+    b.$('method').value='rife';b.$('method').dispatchEvent(new b.w.Event('change'));b.$('duration').value='.6';
+    await b.load('a.mp4,b.mp4,one.mp4\na.mp4,b.mp4,two.mp4');
+    const running=b.$('batch-start').onclick();await until(()=>env.calls===1);b.$('batch-pause').onclick();env.jobs.get('job-1').state='complete';await running;b.close();
+    await new Promise((resolve,reject)=>{const req=env.indexedDB.open('dealer-transition-batches',1);req.onsuccess=()=>{const db=req.result,tx=db.transaction(['meta','rows'],'readwrite'),rows=tx.objectStore('rows'),read=rows.getAll(),meta=tx.objectStore('meta'),get=meta.get('queue');read.onsuccess=()=>{for(const row of read.result){delete row.resolvedSettings;delete row.csvMethod;delete row.csvDuration;rows.put(row);}};get.onsuccess=()=>{const q=get.result;delete q.columns;delete q.warnings;meta.put(q,'queue');};tx.oncomplete=()=>{db.close();resolve();};tx.onerror=()=>reject(tx.error);};});
+    env.pending=false;b=await browser(env);b.selectFiles();b.$('method').value='seedance';b.$('method').dispatchEvent(new b.w.Event('change'));
+    await b.$('batch-start').onclick();
+    assert.deepEqual(env.submissions.map(s=>[s.method,s.duration]),[['rife',.6],['rife',.6]]);
+    assert.ok((await b.state()).rows.every(r=>r.resolvedSettings.method==='rife'&&r.resolvedSettings.duration===.6));
+  }finally{b.close();}
 });

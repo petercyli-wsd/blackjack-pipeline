@@ -103,6 +103,7 @@ test('real batch blend downloads full A + bridge + B without comparison intermed
     const {id}=await c.api('/api/batch/process','POST',{rowId:'actual',method:'blend',duration:0.2,fps:30,prompt:'',mute:false});
     const job=await c.wait(id);assert.equal(job.state,'complete',job.error);assert.ok(Math.abs(job.result.duration-2.2)<0.08);
     assert.equal(job.result.preview,null);assert.equal(job.result.noBridgeUrl,null);
+    assert.equal(job.result.bridgeFrames,6);assert.equal(job.result.bridgeDuration,.2);
     const out=path.join(root,'download.mp4');await fs.writeFile(out,Buffer.from(await (await c.request(job.result.url)).arrayBuffer()));assert.ok((await probe(out)).duration>2);
     await c.api('/api/batch/release','POST',{rowId:'actual'});assert.equal((await c.request(job.result.url)).status,404);
   }finally{await app.close();}

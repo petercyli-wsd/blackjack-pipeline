@@ -54,10 +54,10 @@
   <section class="workspace">
     <article class="card settings">
       <h2><span class="step-number">2</span> Build the transition</h2>
-      <label>Interpolation method<select id="method"></select></label>
+      <label><span id="method-label">Interpolation method</span><select id="method"></select></label>
       <p class="help" id="method-help"></p>
       <p class="provider-note" id="provider-note"></p>
-      <div class="fields"><label>Transition (seconds)<input type="number" id="duration" value="0.4" step="0.1"></label><label>Output frame rate (fps)<input id="fps" type="text" value="source" list="fps-presets" aria-describedby="fps-help" required><datalist id="fps-presets"><option value="source" label="Match clip A"><option value="24000/1001" label="23.976023... fps"><option value="24"><option value="25"><option value="30000/1001" label="29.970030... fps"><option value="30"><option value="50"><option value="60000/1001" label="59.940060... fps"><option value="60"></datalist></label></div>
+      <div class="fields"><label><span id="duration-label">Transition (seconds)</span><input type="number" id="duration" value="0.4" step="0.1"></label><label>Output frame rate (fps)<input id="fps" type="text" value="source" list="fps-presets" aria-describedby="fps-help" required><datalist id="fps-presets"><option value="source" label="Match clip A"><option value="24000/1001" label="23.976023... fps"><option value="24"><option value="25"><option value="30000/1001" label="29.970030... fps"><option value="30"><option value="50"><option value="60000/1001" label="59.940060... fps"><option value="60"></datalist></label></div>
       <p class="help" id="fps-help">Use source to match clip A exactly, a fraction such as 24000/1001, or a decimal such as 23.976 (up to 6 decimal places; 1-60 fps). All exports use this rate. Transition duration rounds to whole frames.</p>
       <p class="help" id="timing"></p>
       <div id="prompt-wrap"><label>Movement instructions<textarea id="prompt" rows="7" maxlength="2000"></textarea></label><button id="restore-prompt" class="quiet">Restore card-preserving prompt</button><p class="help">Describe which hand moves which card, and where it ends. Keep still cards fixed. This prompt aims to reduce continuity errors; it cannot guarantee realism. Inspect both joins and every card. For a small pose gap, compare FILM/RIFE.</p></div>
@@ -68,9 +68,11 @@
     </article>
     <article class="card batch-panel" id="batch-panel" hidden>
       <div class="section-label"><h2>Process a CSV batch</h2><span class="badge">UP TO 10,000 PAIRS</span></div>
-      <p class="help">Every row produces the full first video + bridge + full second video, using the transition settings on the left (above on mobile). Dissolve overlaps the two clips instead. Rows run one at a time. Settings and CSV roots lock at the first start; create a new batch to change them.</p>
+      <p class="help">Every row produces the full first video + bridge + full second video. Dissolve overlaps the clips instead. Optional CSV method and duration override the panel defaults. FPS, movement instructions and mute are shared. Rows run in CSV order, one at a time. Resolved settings and CSV roots freeze at the first start; clear the CSV to start a new batch with different settings.</p>
+      <p class="help" id="batch-settings-summary" role="status"></p>
       <details open><summary>1. Match your local files</summary>
-        <p class="help">CSV columns: <code>first_half,second_half,output</code>. Use paths relative to the selected source folder, and an output name ending in .mp4. Absolute paths need the matching root below. Nothing uploads until you start.</p>
+        <p class="help">Required columns: <code>first_half,second_half,output</code>. Optional: <code>method,duration</code> (seconds). Use a header when adding columns; blank optional cells use defaults. If a CSV method differs from the panel and duration is blank, that method's default duration is used. Paths are relative to the selected source folder; output names end in .mp4. Absolute paths need the matching root below. Nothing uploads until you start.</p>
+        <p class="help" id="batch-csv-warning" role="status"></p>
         <div class="fields"><label>Source root in CSV (absolute paths only)<input id="batch-input-root" placeholder="C:\Videos or /home/me/videos" spellcheck="false"></label><label>Output root in CSV (absolute paths only)<input id="batch-output-root" placeholder="C:\Results or /home/me/results" spellcheck="false"></label></div>
         <div class="fields"><label>Select source folder<input id="batch-folder" type="file" webkitdirectory multiple></label><div><label for="batch-csv">Upload CSV</label><input id="batch-csv" type="file" accept=".csv,text/csv" aria-describedby="batch-csv-info"><div class="batch-csv-loaded"><p class="help" id="batch-csv-info" role="status" aria-live="polite"></p><button id="batch-reset" class="quiet" hidden title="Remove the loaded CSV, batch progress and buffered ZIP outputs. Files saved on your computer are kept.">Clear CSV</button></div></div></div>
         <p class="help" id="batch-source-info">Select the common parent folder containing both halves.</p>
@@ -93,7 +95,7 @@
       <details id="batch-more"><summary>More batch actions</summary><p class="help">Recovery and reports. To replace the loaded batch, use Clear CSV beside its filename above.</p><div class="actions"><button id="batch-report">Download row report</button><button id="batch-cancel" disabled>Cancel current row &amp; pause</button><button id="batch-retry" class="quiet">Retry failed / interrupted rows</button><button id="batch-skip" class="quiet">Skip interrupted rows</button></div></details>
       <p id="batch-status" role="status" aria-live="polite">Load a CSV to begin.</p>
       <p class="help">Keep this tab open and your computer awake while processing. Reloading restores the queue, but you must reselect source/destination folders. Keys are never checkpointed. A server restart can lose the current job; check its provider request before retrying. Free hosting is suitable for pilots, not guaranteed unattended bulk production.</p>
-      <div class="batch-table-wrap"><table><thead><tr><th>Row</th><th>Output</th><th>Status / error</th></tr></thead><tbody id="batch-rows"></tbody></table></div>
+      <div class="batch-table-wrap"><table><thead><tr><th>Row</th><th>Output</th><th>Method / requested duration</th><th>Status / error</th></tr></thead><tbody id="batch-rows"></tbody></table></div>
       <div class="actions"><button id="batch-prev" class="quiet">Previous 50</button><span id="batch-page" class="help"></span><button id="batch-next" class="quiet">Next 50</button></div>
     </article>
     <article class="card review">
@@ -110,6 +112,6 @@
   </section>
   <footer>Try FILM or RIFE for a small pose gap; Kling or Seedance for new motion. Inspect fingers, cards and chips at both joins.</footer>
 </main>
-<script src="browser.js"></script><script src="frame-rate.js"></script><script src="renderer.js"></script><script src="batch-format.js"></script><script src="batch-zip.js"></script><script src="batch-estimates.js"></script><script src="batch.js"></script>
+<script src="browser.js"></script><script src="frame-rate.js"></script><script src="renderer.js"></script><script src="batch-format.js"></script><script src="batch-settings.js"></script><script src="batch-zip.js"></script><script src="batch-estimates.js"></script><script src="batch.js"></script>
 </body>
 </html>

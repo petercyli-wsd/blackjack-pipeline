@@ -15,9 +15,21 @@
     }
     if(quoted)throw new Error('Unclosed quoted field in CSV.');
     if(field||row.length||closed)endRow();
-    if(rows[0]?.map(x=>x.toLowerCase()).join(',')==='first_half,second_half,output')rows.shift();
+    const required=['first_half','second_half','output'],known=[...required,'method','duration'];
+    const header=rows[0]?.map(x=>x.toLowerCase())||[];
+    let columns=null,warnings=[];
+    if(header.some(x=>known.includes(x))){
+      columns=header;
+      for(const name of required)if(!columns.includes(name))throw new Error(`CSV header is missing required column: ${name}.`);
+      for(const name of known)if(columns.filter(x=>x===name).length>1)throw new Error(`Duplicate CSV header: ${name}.`);
+      const extra=columns.map((name,i)=>known.includes(name)?null:name||`(unnamed column ${i+1})`).filter(Boolean);
+      if(extra.length)warnings=[`Ignored CSV columns: ${[...new Set(extra)].join(', ')}.`];
+      rows.shift();
+    }else if(rows.some(row=>row.length>3))throw new Error('A header is required for CSV files with more than 3 columns. Use first_half,second_half,output,method,duration.');
     if(!rows.length)throw new Error('CSV has no data rows.');
     if(rows.length>10000)throw new Error('Maximum 10,000 data rows per CSV.');
+    // Preserve the legacy array API; callers checkpoint this metadata explicitly.
+    Object.defineProperties(rows,{columns:{value:columns},warnings:{value:warnings}});
     return rows;
   }
   const slashes=p=>p.replace(/\\/g,'/');
@@ -40,12 +52,13 @@
     if(p.length>1024||p.split('/').some(x=>/[<>:"|?*]/.test(x)||/[. ]$/.test(x)||/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(x)))throw new Error('Output contains a filename that is unsafe on Windows/macOS/Linux.');
     return p;
   }
-  function prepare(records,inputRoot='',outputRoot=''){
+  function prepare(records,inputRoot='',outputRoot='',columns=records.columns||null){
     const used=new Set();
     return records.map((fields,index)=>{
-      const row={number:index+1,first:fields[0]||'',second:fields[1]||'',output:fields[2]||'',state:'pending',error:''};
+      const value=(name,index)=>fields[columns?columns.indexOf(name):index]||'';
+      const row={number:index+1,first:value('first_half',0),second:value('second_half',1),output:value('output',2),csvMethod:value('method',-1),csvDuration:value('duration',-1),state:'pending',error:''};
       try{
-        if(fields.length!==3)throw new Error(`Expected 3 columns, found ${fields.length}.`);
+        if(fields.length!==(columns?.length||3))throw new Error(`Expected ${columns?.length||3} columns, found ${fields.length}.`);
         row.a=relativePath(row.first,inputRoot,'First half');row.b=relativePath(row.second,inputRoot,'Second half');row.name=outputPath(row.output,outputRoot);
         const key=row.name.toLowerCase();if(used.has(key))throw new Error('Duplicate output name (case-insensitive).');used.add(key);
       }catch(e){row.state='invalid';row.error=e.message;}
