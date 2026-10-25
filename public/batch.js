@@ -40,7 +40,8 @@
   $('mode-single').onclick=()=>mode(false);$('mode-batch').onclick=()=>mode(true);
   function render(){
     $('batch-csv').hidden=!!queue;
-    $('batch-csv-info').textContent=queue?`Loaded: ${queue.csvName||'CSV from saved checkpoint'} (${queue.rows.length} ${queue.rows.length===1?'row':'rows'}). To replace it, open More batch actions → Clear batch checkpoint.`:'';
+    $('batch-csv-info').textContent=queue?`Loaded: ${queue.csvName||'CSV from saved checkpoint'} (${queue.rows.length} ${queue.rows.length===1?'row':'rows'}).`:'';
+    $('batch-reset').hidden=!queue;
     for(const id of ids)$(id).disabled=running||editing||(!available&&!id.startsWith('mode-'));
     $('batch-download').disabled=running||editing||!buffered.length;$('batch-ack').disabled=running||editing||!buffered.length||!downloaded;
     $('batch-start').disabled=running||editing||!available||!queue;$('batch-output-folder').disabled=running||editing||$('batch-destination').value!=='folder'||!window.showDirectoryPicker;
@@ -102,7 +103,7 @@
   $('batch-csv').onchange=async()=>{
     const previousQueue=queue;
     try{
-      if(queue)throw new Error('Clear the existing batch checkpoint before importing a new CSV.');
+      if(queue)throw new Error('Use Clear CSV beside the loaded filename before importing a new CSV.');
       const file=$('batch-csv').files[0];if(!file)return;if(file.size>20*1048576)throw new Error('CSV limit: 20 MB.');
       const records=BatchFormat.parseCSV(await file.text());
       queue={id:crypto.randomUUID(),csvName:file.name,created:new Date().toISOString(),part:1,inputRoot:$('batch-input-root').value,outputRoot:$('batch-output-root').value,rows:BatchFormat.prepare(records,$('batch-input-root').value,$('batch-output-root').value).map((r,i)=>({...r,id:crypto.randomUUID(),fields:records[i]}))};
@@ -285,11 +286,11 @@
   }
   $('batch-retry').onclick=()=>resolveRows(true);$('batch-skip').onclick=()=>resolveRows(false);
   $('batch-reset').onclick=async()=>{
-    if(running||!confirm('Permanently discard this browser’s whole batch checkpoint and any buffered ZIP files without downloading? Download anything you want to keep first. Files already saved to your computer are kept.'))return;
+    if(running||!queue||!confirm(`Clear ${queue.csvName||'the loaded CSV'} and its ${queue.rows.length} batch rows? This permanently removes batch progress and ${buffered.length} buffered output videos without downloading. Save anything you want to keep first. Your original CSV, source videos and files already saved to your computer are kept.`))return;
     const previous=queue;
     try{
       const current=await api('/api/batch');if(current.rowId)await api('/api/batch/release','POST',{rowId:current.rowId});
-      queue=null;await checkpoint({clear:true});buffered=[];downloaded=false;page=0;$('batch-rows').replaceChildren();$('batch-metrics').textContent='No CSV loaded.';$('batch-progress').value=0;$('batch-page').textContent='';render();message('Checkpoint cleared. Load another CSV.');
+      queue=null;await checkpoint({clear:true});buffered=[];downloaded=false;page=0;$('batch-csv').value='';$('batch-rows').replaceChildren();$('batch-metrics').textContent='No CSV loaded.';$('batch-progress').value=0;$('batch-page').textContent='';render();message('CSV and batch checkpoint cleared. Choose another CSV to begin.');
     }catch(e){queue=previous;render();message(e.message,true);}
   };
   // All persistent edits share one origin-wide lease. Refresh the checkpoint under

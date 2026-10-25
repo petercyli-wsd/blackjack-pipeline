@@ -103,7 +103,7 @@
     },onProgress:fn=>progress=fn
   };
   document.getElementById('end-session').onclick=async()=>{
-    if(!confirm('End your server session? Your keys and temporary server videos/results will be removed. Browser batch checkpoints and buffered ZIPs remain until Clear batch checkpoint. Download results first. Submitted cloud jobs may still be billed.'))return;
+    if(!confirm('End your server session? Your keys and temporary server videos/results will be removed. Browser batch checkpoints and buffered ZIPs remain until you use Clear CSV beside the loaded filename. Download results first. Submitted cloud jobs may still be billed.'))return;
     try{await api('/api/logout','POST');location.reload();}catch(e){alert(e.message);}
   };
   document.getElementById('shutdown').onclick=async()=>{

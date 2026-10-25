@@ -119,15 +119,21 @@ test('failed ZIP clear checkpoints keep buffered files and row states',async()=>
 test('CSV filename and row count survive reload; clearing and invalid imports show the picker again',async()=>{
   const env=environment();let b=await browser(env);
   try{
+    assert.equal(b.$('batch-reset').hidden,true);
     await b.load('a.mp4,b.mp4,out.mp4','dealer-pairs.csv');
     assert.equal(b.$('batch-csv').hidden,true);
+    assert.equal(b.$('batch-reset').hidden,false);assert.equal(b.$('batch-reset').textContent,'Clear CSV');assert.equal(b.$('batch-reset').closest('#batch-more'),null);
     assert.match(b.$('batch-csv-info').textContent,/Loaded: dealer-pairs\.csv \(1 row\)/);
     assert.equal((await b.state()).csvName,'dealer-pairs.csv');
     b.close();b=await browser(env);
     assert.equal(b.$('batch-csv').hidden,true);
     assert.match(b.$('batch-csv-info').textContent,/dealer-pairs\.csv \(1 row\)/);
+    b.w.confirm=()=>false;await b.$('batch-reset').onclick();assert.equal((await b.state()).csvName,'dealer-pairs.csv');
+    b.w.confirm=()=>true;
     await b.$('batch-reset').onclick();
     assert.equal(b.$('batch-csv').hidden,false);assert.equal(b.$('batch-csv-info').textContent,'');
+    assert.equal(b.$('batch-reset').hidden,true);assert.equal(await b.state(),null);
+    b.close();b=await browser(env);assert.equal(b.$('batch-csv').hidden,false);assert.equal(b.$('batch-reset').hidden,true);
     await b.load('"unterminated','bad.csv');
     assert.equal(b.$('batch-csv').hidden,false);assert.equal(b.$('batch-csv-info').textContent,'');
     assert.match(b.$('batch-status').textContent,/Unclosed quoted field/);assert.equal(await b.state(),null);

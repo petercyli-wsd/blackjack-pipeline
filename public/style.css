@@ -95,6 +95,7 @@ dialog a{display:block;color:var(--mint);margin:15px 0}
 .batch-panel details{margin-top:20px}.batch-panel input[type=file]{height:auto;min-height:44px;padding:8px;font-size:12px}
 .batch-panel input::file-selector-button{border:0;border-radius:4px;padding:7px;margin-right:8px;background:#344b64;color:#ecf4ff;cursor:pointer}
 #batch-csv-info{overflow-wrap:anywhere;color:var(--mint)}#batch-csv-info:empty{display:none}
+.batch-csv-loaded{display:flex;align-items:center;flex-wrap:wrap;gap:10px}.batch-csv-loaded .help{flex:1;min-width:0}.batch-csv-loaded button{align-self:center}
 .batch-panel .actions{gap:8px;margin-top:12px}.batch-metrics{white-space:pre-line;margin:22px 0 12px;color:var(--mint);line-height:1.8;font-size:13px}
 .batch-estimates{margin-top:22px;padding:16px;border:1px solid var(--border);border-radius:8px;background:#111e29}
 #batch-estimate{white-space:pre-line;color:#c6e6db;margin-bottom:0}
