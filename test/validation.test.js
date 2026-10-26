@@ -65,13 +65,19 @@ test('review loop bounds paid redos, preserves the original on uncertainty/error
   await fs.mkdir('output',{recursive:true});const root=await fs.mkdtemp(path.resolve('output/review-loop-')),input=path.join(root,'input.mp4');
   await ff(['-f','lavfi','-i','color=size=96x64:rate=24:duration=1','-c:v','libx264',input]);
   async function exercise(reviews,{method='kling-fal',mode='redo',maxRetries=2,renderError=false}={}){
-    const dir=await fs.mkdtemp(path.join(root,'case-')),renders=[],assessments=[],requests=[];
+    const dir=await fs.mkdtemp(path.join(root,'case-')),renders=[],assessments=[],requests=[],reviewBudgets=[];
     const result=await runValidated({a:input,b:input,aEnd:1,bStart:0,method,duration:3,fps:24,prompt:DEFAULT_PROMPT,review:{mode,maxRetries}},{dir,key:'generation-secret',reviewKey:'review-secret',signal:new AbortController().signal,onProviderJob:j=>requests.push(j),
       renderVideo:async(o,{dir,onProviderJob})=>{renders.push(o);onProviderJob({provider:'fal',requestId:`gen-${renders.length}`});if(renderError&&renders.length>1)throw new Error('Network broke');await fs.mkdir(dir,{recursive:true});const output=path.join(dir,'result.mp4');await fs.copyFile(input,output);return {output,frames:[],duration:1,fps:24,joinStart:.25,bridgeDuration:.5};},
-      reviewVideo:async()=>{const r=reviews[Math.min(assessments.length,reviews.length-1)];assessments.push(r);if(r instanceof Error)throw r;return r;}});
-    return {result,renders,assessments,requests};
+      reviewVideo:async(result,options)=>{reviewBudgets.push(options.review.maxRetries);const r=reviews[Math.min(assessments.length,reviews.length-1)];assessments.push(r);if(r instanceof Error)throw r;return r;}});
+    return {result,renders,assessments,requests,reviewBudgets};
   }
   let r=await exercise([fail,pass]);assert.equal(r.renders.length,2);assert.equal(r.result.review.verdict,'pass');assert.equal(r.result.review.selectedAttempt,1);assert.match(r.renders[1].prompt,/Correction priorities/);assert.equal(r.requests.length,2);
+  r=await exercise([fail,{...fail,issues:[{category:'motion',severity:'major',time:.5,evidence:'An unnecessary arm sweep.'}]},pass]);
+  assert.equal(r.renders.length,3);assert.equal(r.result.review.redoCount,2);assert.equal(r.result.review.selectedAttempt,2);
+  assert.deepEqual(r.reviewBudgets,[2,1,0]);
+  assert.match(r.renders[2].prompt,/No extra card handling/);assert.match(r.renders[2].prompt,/Only the smallest direct pose adjustment/);
+  assert.equal(r.renders[2].prompt.split('No extra card handling').length,2);assert.ok(r.renders[2].prompt.length<=2000);
+  r=await exercise([fail,{...pass,verdict:'uncertain',confidence:.8}]);assert.equal(r.renders.length,2);assert.equal(r.result.review.verdict,'needs_review');assert.equal(r.result.review.selectedAttempt,0);
   r=await exercise([fail]);assert.equal(r.renders.length,3);assert.equal(r.result.review.verdict,'needs_review');assert.equal(r.result.review.selectedAttempt,0);assert.match(r.result.output,/attempt-0/);
   r=await exercise([{...fail,confidence:.4}]);assert.equal(r.renders.length,1);assert.equal(r.result.review.verdict,'needs_review');
   r=await exercise([{...fail,confirmed:false}]);assert.equal(r.renders.length,1);

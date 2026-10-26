@@ -71,6 +71,51 @@ function failedInitialReview(){
   return {verdict:'needs_review',summary,pauseBatch:true,selectedAttempt:0,redoCount:0,attempts:[{attempt:0,source:'existing',assessment:{verdict:'uncertain',confidence:0,summary,issues:[],error:true}}]};
 }
 
+test('new work defaults to one automatic redo; restoring an explicit off checkpoint keeps it off',async()=>{
+  const env=environment();let b=await browser(env);
+  try{
+    assert.equal(b.$('quality-mode').value,'redo');assert.equal(b.$('quality-retries').value,'1');
+    b.$('batch-workflow').value='existing';b.$('batch-workflow').onchange();assert.equal(b.$('quality-mode').value,'redo');
+    b.$('batch-workflow').value='generate';b.$('batch-workflow').onchange();b.$('quality-mode').value='off';
+    await b.load('a.mp4,b.mp4,one.mp4');await b.$('batch-start').onclick();const before=await b.state();
+    b.close();env.initDelay=100;b=await browser(env);
+    assert.equal(b.$('quality-mode').value,'off');assert.deepEqual(await b.state(),before);assert.equal(env.calls,1);
+    assert.equal(b.$('batch-enable-repairs').hidden,true);
+  }finally{b.close();}
+});
+
+test('review-only repair batch enables redos for flagged and pending rows without repeating approvals',async()=>{
+  const folder=memoryFolder({'clean.mp4':'clean-original','flawed.mp4':'flawed-original','error.mp4':'error-original','pending.mp4':'pending-original'}),env=environment(),put=IDBObjectStore.prototype.put;
+  const approved={verdict:'pass',summary:'Clean',selectedAttempt:0,redoCount:0,pauseBatch:false,attempts:[{attempt:0,source:'existing',assessment:{verdict:'pass',confidence:.8,issues:[]}}]};
+  env.review=n=>n===1?approved:n===3?failedInitialReview():{...approved,verdict:'needs_review',summary:'Unnecessary sweep.',attempts:[{attempt:0,source:'existing',assessment:{verdict:'fail',confidence:.95,issues:[{category:'motion',severity:'major',time:.5,evidence:'Arm sweeps across the table.'}]}}]};
+  let b=await browser(env,{folder:folder.root});
+  try{
+    await setupRepair(b,'first_half,second_half,output,method,duration\na.mp4,b.mp4,clean.mp4,kling-fal,3\na.mp4,b.mp4,flawed.mp4,kling-fal,3\na.mp4,b.mp4,error.mp4,kling-fal,3\na.mp4,b.mp4,pending.mp4,kling-fal,3');
+    b.$('quality-mode').value='review';await b.$('batch-start').onclick();const before=await b.state(),writes=folder.writes.length;
+    assert.equal(env.calls,3);assert.equal(before.settings.review.mode,'review');
+    b.close();b=await browser(env,{folder:folder.root});
+    assert.equal(b.$('quality-mode').value,'review');assert.equal(b.$('batch-enable-repairs').hidden,false);assert.match(b.$('batch-enable-repairs-help').textContent,/recheck 2 flagged original\(s\) and continue 1 pending/);
+    b.$('batch-repair-retries').value='2';b.w.confirm=()=>false;await b.$('batch-enable-redos').onclick();assert.deepEqual(await b.state(),before);
+    b.w.confirm=()=>true;env.locked=true;await b.$('batch-enable-redos').onclick();assert.match(b.$('batch-status').textContent,/another tab/);assert.deepEqual(await b.state(),before);env.locked=false;
+    IDBObjectStore.prototype.put=function(value,...args){if(this.name==='rows'&&value.state==='pending')throw new Error('Storage unavailable');return put.call(this,value,...args);};
+    await b.$('batch-enable-redos').onclick();assert.deepEqual(await b.state(),before);assert.match(b.$('batch-status').textContent,/Storage unavailable/);assert.equal(b.$('batch-enable-repairs').hidden,false);
+    IDBObjectStore.prototype.put=put;b.w.confirm=text=>{assert.match(text,/up to 2 extra generations/);assert.match(text,/Recheck 2 flagged originals/);assert.match(text,/use credits/);return true;};
+    await b.$('batch-enable-redos').onclick();let q=await b.state();
+    assert.equal(q.id,before.id);assert.equal(q.csvName,before.csvName);assert.deepEqual(q.rows[0],before.rows[0]);assert.deepEqual(q.rows[3],before.rows[3]);
+    assert.deepEqual(q.settings,{...before.settings,review:{...before.settings.review,mode:'redo',maxRetries:2}});
+    assert.deepEqual(q.rows.map(r=>r.state),['saved','pending','pending','pending']);
+    for(const i of [1,2]){assert.deepEqual(q.rows[i].history[0].review,before.rows[i].result.review);assert.deepEqual(q.rows[i].history[0].providerJobs,before.rows[i].providerJobs);assert.equal(q.rows[i].originalDigest,before.rows[i].originalDigest);assert.deepEqual(q.rows[i].resolvedSettings,before.rows[i].resolvedSettings);}
+    assert.equal(env.calls,3);assert.equal(folder.writes.length,writes);assert.equal(b.$('batch-enable-repairs').hidden,true);
+    // Persist the change before starting work; refreshing does not reset the limit.
+    b.close();b=await browser(env,{folder:folder.root});assert.equal(b.$('quality-mode').value,'redo');assert.equal(b.$('quality-retries').value,'2');
+    env.review=n=>n===4?{...approved,selectedAttempt:1,redoCount:1}:approved;
+    b.selectFiles();await b.$('batch-output-folder').onclick();await b.$('batch-start').onclick();q=await b.state();
+    assert.equal(env.calls,6);assert.ok(env.submissions.slice(3).every(s=>s.review.mode==='redo'&&s.review.maxRetries===2));
+    assert.equal(await folder.text('clean.mp4'),'clean-original');assert.equal(await folder.text('flawed.mp4'),'test-video');assert.equal(await folder.text(q.rows[1].backupPath),'flawed-original');assert.equal(await folder.text('error.mp4'),'error-original');assert.equal(await folder.text('pending.mp4'),'pending-original');
+    assert.equal(q.rows[1].savedName,'flawed.mp4');assert.deepEqual(q.rows[0],before.rows[0]);
+  }finally{IDBObjectStore.prototype.put=put;b.close();}
+});
+
 test('restored review rows explain low confidence separately from service errors',async()=>{
   const folder=memoryFolder({'one.mp4':'one','two.mp4':'two','error.mp4':'error'}),env=environment();
   env.review=n=>n===3?failedInitialReview():{verdict:'needs_review',summary:'No visible continuity defect.',selectedAttempt:0,redoCount:0,pauseBatch:false,attempts:[{attempt:0,source:'existing',assessment:{verdict:'uncertain',confidence:n===1?.75:.8,summary:'No visible continuity defect.',issues:[]}}]};
@@ -204,7 +249,7 @@ test('batch failures are visible as dismissible notifications and link back to t
   const env=environment(),b=await browser(env);env.keys={fal:false,kie:false};
   try{
     await b.load('a.mp4,b.mp4,out.mp4');await b.$('batch-start').onclick();
-    let toast=b.$('notifications').querySelector('[data-notice="batch"]');assert.match(toast.textContent,/Missing provider keys/);
+    let toast=b.$('notifications').querySelector('[data-notice="batch"]');assert.match(toast.textContent,/Quality review needs your fal key/);
     assert.equal(env.uploads,0);const id=(await b.state()).id;
     await b.$('batch-start').onclick();assert.equal(b.$('notifications').children.length,1);
     toast=b.$('notifications').firstElementChild;toast.querySelector('button').click();
@@ -234,7 +279,7 @@ test('changing a frozen task pauses first and discards the checkpoint only after
 test('existing-folder review matches the CSV, uploads three files, uses only fal for review and checkpoints classified results',async()=>{
   const env=environment();env.keys={fal:true,kie:false};env.review={verdict:'pass',summary:'No major issues',redoCount:0,attempts:[]};let b=await browser(env);
   try{
-    b.$('batch-workflow').value='existing';b.$('batch-workflow').onchange();assert.equal(b.$('quality-mode').value,'review');assert.equal(b.$('batch-existing-wrap').hidden,false);
+    b.$('batch-workflow').value='existing';b.$('batch-workflow').onchange();b.$('quality-mode').value='review';assert.equal(b.$('batch-existing-wrap').hidden,false);
     await b.load('first_half,second_half,output,method,duration\na.mp4,b.mp4,sub/one.mp4,kling-kie,3');
     await b.$('batch-start').onclick();assert.match(b.$('batch-status').textContent,/existing output folder/);assert.equal(env.uploads,0);
     Object.defineProperty(b.$('batch-existing-folder'),'files',{configurable:true,value:[{name:'one.mp4',size:10,lastModified:1,webkitRelativePath:'old/sub/one.mp4'}]});b.$('batch-existing-folder').onchange();
@@ -445,6 +490,7 @@ test('browser storage failure retains the completed server result and retries sa
 test('mixed CSV validates bad settings per row, blocks all uploads for missing keys and reports actual durations',async()=>{
   const env=environment(),b=await browser(env);env.keys={fal:false,kie:false};
   try{
+    b.$('quality-mode').value='off';
     await b.load('OUTPUT,first_half,second_half,METHOD,DURATION,score\nfilm.mp4,a.mp4,b.mp4,FiLm,.33,10\nkling.mp4,a.mp4,b.mp4,kling-fal,3,20\nkie.mp4,a.mp4,b.mp4,kling-kie,3,30\nlocal.mp4,a.mp4,b.mp4,blend,.3,40\nbad.mp4,a.mp4,b.mp4,nope,.4,50\nlong.mp4,a.mp4,b.mp4,film,5,60\nfraction.mp4,a.mp4,b.mp4,seedance,4.5,70');
     b.$('mode-batch').onclick();await b.$('batch-validate').onclick();
     assert.match(b.$('batch-status').textContent,/4 ready, 3 invalid/);

@@ -181,7 +181,10 @@ async function runValidated(o,{dir,key,reviewKey,signal,log=()=>{},onProviderJob
   for(let index=0;index<=policy.maxRetries;index++){
     signal.throwIfAborted();
     try{
-      current=index===0&&candidate?{result:await importedResult(candidate,o,{dir:path.join(dir,'imported'),signal}),jobs:[]}:await generate(index,index?repairPrompt(o.prompt,attempts.at(-1).assessment):o.prompt);
+      // Keep earlier confirmed correction priorities in later retries, even if
+      // the most recent attempt failed for a different reason.
+      const corrections={issues:attempts.filter(a=>a.assessment?.verdict==='fail'&&a.assessment.confirmed===true).flatMap(a=>a.assessment.issues)};
+      current=index===0&&candidate?{result:await importedResult(candidate,o,{dir:path.join(dir,'imported'),signal}),jobs:[]}:await generate(index,index?repairPrompt(o.prompt,corrections):o.prompt);
     }catch(error){
       if(!best||signal.aborted)throw error;
       attempts.push({attempt:index,generationError:providerError('Redo',error,key).message});pauseBatch=true;break;
@@ -193,7 +196,8 @@ async function runValidated(o,{dir,key,reviewKey,signal,log=()=>{},onProviderJob
       const source=expected.source?await probe(o.a,signal):null,target=expected.source?source.fps:expected.value;
       if(Math.abs(info.fps-target)>Math.max(.001,target*.00001))throw new Error('Output frame rate does not match the selected source/output rate. Check the original settings before redoing.');
       // Fail closed on technical/configuration errors; paying for another generation will not fix them.
-      assessment=await reviewVideo(current.result,{...o,review:policy},{dir:path.join(dir,`review-${index}`),key:reviewKey,signal,log,onProviderJob:j=>onProviderJob({...j,attempt:index})});
+      // A blind confirmation is only useful when another paid redo is possible.
+      assessment=await reviewVideo(current.result,{...o,review:{...policy,maxRetries:policy.maxRetries-index}},{dir:path.join(dir,`review-${index}`),key:reviewKey,signal,log,onProviderJob:j=>onProviderJob({...j,attempt:index})});
       signal.throwIfAborted();
       const checked=parseReview(JSON.stringify(assessment),policy.appearance);
       // Retain the original model verdict for audit, but validate the effective

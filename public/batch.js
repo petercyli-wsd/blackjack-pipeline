@@ -8,7 +8,7 @@
   let queue=null,files=new Map(),foldedFiles=new Map(),destination=null,running=false,stopAfter=false,cancelled=false,uploadController=null,page=0,downloaded=false;
   let buffered=[],db,available=false,editing=false,existingFiles=new Map();
   const message=(text,error=false,notice)=>{$('batch-status').textContent=text;$('batch-status').classList.toggle('error',error);if(error||notice)window.StudioNotice.show({id:'batch',message:text,kind:error?'error':'warning',target:'batch-status'});else window.StudioNotice.dismiss('batch');};
-  const ids=['batch-workflow','batch-existing-folder','batch-csv','batch-folder','batch-input-root','batch-output-root','batch-destination','batch-output-folder','batch-path-label','batch-validate','batch-start','batch-reset','batch-retry','batch-retry-reviews','batch-skip','batch-download','batch-ack','batch-discard','batch-unit-cost','batch-cost-unit','mode-single','mode-batch'];
+  const ids=['batch-workflow','batch-existing-folder','batch-csv','batch-folder','batch-input-root','batch-output-root','batch-destination','batch-output-folder','batch-path-label','batch-validate','batch-start','batch-reset','batch-retry','batch-retry-reviews','batch-enable-redos','batch-repair-retries','batch-skip','batch-download','batch-ack','batch-discard','batch-unit-cost','batch-cost-unit','mode-single','mode-batch'];
   function lock(value){running=value;ui.lock(value);for(const id of ids)$(id).disabled=value;$('batch-pause').disabled=!value;$('batch-cancel').disabled=!value;render();}
   const storage=new Promise((resolve,reject)=>{
     const request=indexedDB.open('dealer-transition-batches',1);
@@ -41,6 +41,23 @@
       !row.replacement&&!row.backupPath&&review?.verdict==='needs_review'&&review.pauseBatch===true&&
       review.selectedAttempt===0&&review.redoCount===0&&review.attempts?.length===1&&
       attempt.attempt===0&&attempt.source==='existing'&&attempt.assessment?.error===true;
+  }
+  function flaggedOriginal(row){
+    const review=row.result?.review,attempt=review?.attempts?.[0];
+    return row.state==='saved'&&!row.replacement&&!row.backupPath&&review?.verdict==='needs_review'&&
+      review.selectedAttempt===0&&review.redoCount===0&&review.attempts?.length===1&&
+      attempt.attempt===0&&attempt.source==='existing'&&!!attempt.assessment;
+  }
+  function canEnableRedos(){
+    const review=queue?.settings?.review;
+    return queue?.workflow==='existing'&&queue.destination==='replace'&&
+      (review?.mode==='review'||review?.mode==='redo'&&review.maxRetries===0)&&
+      queue.rows.some(row=>flaggedOriginal(row)||row.state==='pending');
+  }
+  function requeueReviewedRow(row){
+    const next={...row,state:'pending',error:'',history:[...(row.history||[]),{state:row.state,error:row.error,providerJob:row.providerJob,providerJobs:row.providerJobs,jobId:row.jobId,review:row.result.review,fileAction:row.fileAction,at:new Date().toISOString()}]};
+    for(const key of ['result','providerJob','providerJobs','jobId','savedName','fileAction','elapsed','started','attempt'])delete next[key];
+    return next;
   }
   function reviewFailure(review){
     const last=review.attempts?.at(-1);
@@ -106,6 +123,10 @@
     $('batch-review-recovery').hidden=!failedReviews;
     $('batch-retry-reviews').disabled=running||editing||!failedReviews;
     $('batch-review-recovery-help').textContent=failedReviews?`${failedReviews} original video${failedReviews===1?' has':'s have'} not been reviewed because the review service failed. Fix the reported error, then choose Retry failed reviews and Start / resume batch. This keeps your CSV and completed reviews. Originals stay unchanged unless a later repair passes review.`:'';
+    const enableRedos=canEnableRedos(),unsettled=queue?.rows.some(r=>[...pauseStates,'uncertain'].includes(r.state));
+    $('batch-enable-repairs').hidden=!enableRedos;
+    $('batch-enable-redos').disabled=running||editing||!enableRedos||unsettled;
+    $('batch-enable-repairs-help').textContent=enableRedos?`${running?'Pause after this row first. ':unsettled?'Resolve interrupted work before switching. ':''}Enable automatic redos for this batch: recheck ${queue.rows.filter(flaggedOriginal).length} flagged original(s) and continue ${queue.rows.filter(r=>r.state==='pending').length} pending row(s). Approved rows stay completed. New reviews and any redos use credits; your CSV and prior reports are kept.`:'';
     $('batch-skip').disabled=running||editing||!queue?.rows.some(r=>['uncertain',...pauseStates].includes(r.state));
     for(const id of ['batch-report','batch-reset'])$(id).disabled=running||editing||!queue;
     const settings=queue?.settings||ui.settings(),methods=ui.methods();
@@ -189,7 +210,7 @@
     $('batch-source-info').textContent=`${files.size} files available locally from ${$('batch-folder').files[0]?.webkitRelativePath.split('/')[0]||'selected folder'}. Only files needed by the current row upload.`;
   };
   $('batch-existing-folder').onchange=()=>{existingFiles=new Map();for(const file of $('batch-existing-folder').files){const name=file.webkitRelativePath.split('/').slice(1).join('/');existingFiles.set(name,existingFiles.has(name)?null:file);}$('batch-existing-info').textContent=`${existingFiles.size} existing files selected. CSV output paths must match relative to this folder. Original files are kept; reviewed copies go to a new destination.`;};
-  $('batch-workflow').onchange=()=>{if($('batch-workflow').value!=='existing'&&replacing())$('batch-destination').value='zip';if($('batch-workflow').value==='existing'&&$('quality-mode').value==='off')$('quality-mode').value='review';render();};
+  $('batch-workflow').onchange=()=>{if($('batch-workflow').value!=='existing'&&replacing())$('batch-destination').value='zip';if($('batch-workflow').value==='existing'&&$('quality-mode').value==='off')$('quality-mode').value='redo';render();};
   $('batch-csv').onchange=async()=>{
     const previousQueue=queue;
     try{
@@ -207,7 +228,8 @@
   $('batch-output-folder').onclick=async()=>{try{const picked=await window.showDirectoryPicker({mode:'readwrite',id:'studio-batch-output',...(destination?{startIn:destination}:{})});destination=picked;$('batch-path-label').value='';renderDestination();}catch(e){if(e.name!=='AbortError')message(e.message,true);}};
   for(const id of ['batch-unit-cost','batch-cost-unit'])$(id).oninput=()=>{render();};
   $('method').addEventListener('change',render);
-  window.addEventListener('studio:ready',render);
+  function restoreBatchSettings(){if(queue?.settings&&ui.methods().length)ui.restoreSettings(queue.settings);render();}
+  window.addEventListener('studio:ready',restoreBatchSettings);
   for(const id of ['duration','fps'])$(id).addEventListener('input',render);
   for(const id of ['quality-mode','quality-retries','quality-appearance'])$(id).addEventListener('change',render);
   function checkCancelled(){if(cancelled)throw Object.assign(new Error('Cancelled by you. Submitted cloud work may still be billed.'),{cancelled:true});}
@@ -414,15 +436,32 @@
       const current=await api('/api/batch');
       const completed=rows.find(row=>row.attempt===current.rowId);
       if(completed)await release(completed);
-      const changed=new Map(rows.map(row=>{
-        const next={...row,state:'pending',error:'',history:[...(row.history||[]),{state:row.state,error:row.error,providerJob:row.providerJob,providerJobs:row.providerJobs,jobId:row.jobId,review:row.result.review,fileAction:row.fileAction,at:new Date().toISOString()}]};
-        for(const key of ['result','providerJob','providerJobs','jobId','savedName','fileAction','elapsed','started','attempt'])delete next[key];
-        return [row.id,next];
-      }));
+      const changed=new Map(rows.map(row=>[row.id,requeueReviewedRow(row)]));
       queue={...queue,rows:queue.rows.map(row=>changed.get(row.id)||row)};
       await checkpoint({rows:[...changed.values()]});
       message(`${rows.length} failed review${rows.length===1?'':'s'} queued again. Reselect folders if needed, then choose Start / resume batch. Completed reviews and original videos are kept.`);
     }catch(e){queue=previous;throw e;}
+  };
+  $('batch-enable-redos').onclick=async()=>{
+    if(!canEnableRedos())return;
+    if(queue.rows.some(r=>[...pauseStates,'uncertain'].includes(r.state)))throw new Error('Finish or resolve interrupted work before enabling redos.');
+    const maxRetries=Number($('batch-repair-retries').value),rows=queue.rows.filter(flaggedOriginal);
+    if(![1,2].includes(maxRetries))throw new Error('Choose 1 or 2 redos.');
+    if(!confirm(`Enable up to ${maxRetries} extra generations per eligible row? Recheck ${rows.length} flagged originals and continue pending rows; approved rows stay completed. Reviews and redos use credits. Only confirmed major defects can trigger Kling/Seedance redos, and only approved repairs replace originals with backups. Your CSV, filenames and other settings are kept.`))return;
+    const previous=queue;
+    try{
+      const current=await api('/api/batch');
+      if(current.rowId){
+        const completed=queue.rows.find(row=>row.attempt===current.rowId&&row.state==='saved');
+        if(!completed)throw new Error('Another row still owns the server workspace. Finish or recover it before enabling redos.');
+        await release(completed);
+      }
+      const changed=new Map(rows.map(row=>[row.id,requeueReviewedRow(row)]));
+      queue={...queue,settings:{...queue.settings,review:{...queue.settings.review,mode:'redo',maxRetries}},rows:queue.rows.map(row=>changed.get(row.id)||row)};
+      await checkpoint({rows:[...changed.values()]});
+    }catch(e){queue=previous;throw e;}
+    ui.restoreSettings(queue.settings);
+    message(`Automatic redos enabled (up to ${maxRetries} per eligible row). ${rows.length} flagged originals queued for recheck; approved rows are kept. Reselect folders if needed, then Start / resume batch. No videos were regenerated yet.`);
   };
   async function resolveRows(retry){
     if(!queue||running)return;
@@ -463,7 +502,7 @@
       });
     }catch(e){message(`Paused: ${e.message}`,true);}finally{editing=false;render();}
   };}
-  for(const id of ['batch-start','batch-validate','batch-download','batch-ack','batch-retry','batch-retry-reviews','batch-skip','batch-reset','batch-discard'])$(id).onclick=exclusive($(id).onclick);
+  for(const id of ['batch-start','batch-validate','batch-download','batch-ack','batch-retry','batch-retry-reviews','batch-enable-redos','batch-skip','batch-reset','batch-discard'])$(id).onclick=exclusive($(id).onclick);
   const discardForTask=exclusive(()=>clearBatch(true));
   $('batch-change-task').onclick=()=>running?$('batch-pause').onclick():discardForTask();
   $('batch-csv').onchange=exclusive($('batch-csv').onchange);
@@ -475,7 +514,7 @@
       mode(true);message('Batch checkpoint restored. Reselect folders and enter keys if needed, then resume.'+(queue.settings?' To change tasks, use Discard batch & change task beside the locked selector.':''),false,true);
     }
     if(!window.showDirectoryPicker){$('batch-destination').querySelector('[value=folder]').disabled=true;if(queue?.destination!=='replace')$('batch-destination').value='zip';}
-    render();
+    restoreBatchSettings();
   }).catch(e=>{available=false;message(`Browser checkpoint storage unavailable: ${e.message}. Enable site storage to use batches.`,true);render();});
   render();
 })();
