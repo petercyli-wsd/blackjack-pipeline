@@ -221,7 +221,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
       if(route.startsWith('/media/')&&['GET','HEAD'].includes(req.method)){
         const file=s?.media.get(route.slice('/media/'.length));if(!file)return json(res,404,{error:'Media not found in your session'});return await sendFile(req,res,file,url.searchParams.get('download')==='1');
       }
-      const staticFiles={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/renderer.js':'renderer.js','/browser.js':'browser.js','/frame-rate.js':'frame-rate.js','/batch.js':'batch.js','/batch-estimates.js':'batch-estimates.js','/batch-settings.js':'batch-settings.js','/batch-format.js':'batch-format.js','/batch-zip.js':'batch-zip.js'};
+      const staticFiles={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/notices.js':'notices.js','/renderer.js':'renderer.js','/browser.js':'browser.js','/frame-rate.js':'frame-rate.js','/batch.js':'batch.js','/batch-estimates.js':'batch-estimates.js','/batch-settings.js':'batch-settings.js','/batch-format.js':'batch-format.js','/batch-zip.js':'batch-zip.js'};
       if(staticFiles[route]&&req.method==='GET'){
         const name=staticFiles[route],types={html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8'};
         res.writeHead(200,{'Content-Type':types[name.split('.').at(-1)],'Cache-Control':'no-store'});res.end(await fs.readFile(path.join(__dirname,'public',name)));return;

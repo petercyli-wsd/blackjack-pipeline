@@ -46,7 +46,7 @@ async function browser(env,{folder}={}){
   if(folder)w.showDirectoryPicker=async()=>folder;
   // Avoid 1.5-second polling waits; preserve asynchronous ordering.
   const timeout=w.setTimeout.bind(w);w.setTimeout=(fn,ms,...args)=>timeout(fn,ms===1500||ms===5000?1:ms,...args);
-  for(const name of ['browser.js','frame-rate.js','renderer.js','batch-format.js','batch-settings.js','batch-zip.js','batch-estimates.js','batch.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
+  for(const name of ['notices.js','browser.js','frame-rate.js','renderer.js','batch-format.js','batch-settings.js','batch-zip.js','batch-estimates.js','batch.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
   await until(()=>$('method').options.length===METHODS.length&&!$('batch-csv').disabled).catch(e=>{throw new Error(`${e.message}: ${$('batch-status').textContent}; ${$('status').textContent}; methods=${$('method').options.length}`);});
   const selectFiles=()=>{
     Object.defineProperty($('batch-folder'),'files',{configurable:true,value:['a.mp4','b.mp4'].map(name=>({name,size:10,lastModified:1,webkitRelativePath:'videos/'+name}))});$('batch-folder').onchange();
@@ -55,6 +55,37 @@ async function browser(env,{folder}={}){
   const state=async()=>new Promise((resolve,reject)=>{const request=env.indexedDB.open('dealer-transition-batches',1);request.onsuccess=()=>{const db=request.result,tx=db.transaction(['meta','rows']),r=tx.objectStore('meta').get('queue'),rows=tx.objectStore('rows').getAll();tx.oncomplete=()=>{db.close();resolve(r.result?{...r.result,rows:rows.result.sort((a,b)=>a.number-b.number)}:null);};tx.onerror=()=>reject(tx.error);};});
   return {w,$,load,selectFiles,state,close:()=>w.close()};
 }
+
+test('batch failures are visible as dismissible notifications and link back to their context without changing the queue',async()=>{
+  const env=environment(),b=await browser(env);env.keys={fal:false,kie:false};
+  try{
+    await b.load('a.mp4,b.mp4,out.mp4');await b.$('batch-start').onclick();
+    let toast=b.$('notifications').querySelector('[data-notice="batch"]');assert.match(toast.textContent,/Missing provider keys/);
+    assert.equal(env.uploads,0);const id=(await b.state()).id;
+    await b.$('batch-start').onclick();assert.equal(b.$('notifications').children.length,1);
+    toast=b.$('notifications').firstElementChild;toast.querySelector('button').click();
+    assert.equal(b.$('batch-panel').hidden,false);assert.equal(b.w.document.activeElement.id,'batch-status');assert.equal(b.$('notifications').children.length,0);assert.equal((await b.state()).id,id);
+    env.clearError='Cannot clear <script>bad()</script>';await b.$('clear-results').onclick();
+    assert.match(b.$('notifications').textContent,/<script>bad/);assert.equal(b.$('notifications').querySelector('script'),null);
+    b.$('notifications').querySelector('[aria-label="Dismiss notification"]').click();assert.equal(b.$('notifications').children.length,0);assert.match(b.$('status').textContent,/Cannot clear/);
+    env.keys={fal:true,kie:true};await b.$('batch-start').onclick();assert.match(b.$('notifications').textContent,/remaining ZIP part/);
+  }finally{b.close();}
+});
+
+test('changing a frozen task pauses first and discards the checkpoint only after confirmation',async()=>{
+  const env=environment(),b=await browser(env);env.pending=true;
+  try{
+    await b.load('a.mp4,b.mp4,one.mp4\na.mp4,b.mp4,two.mp4');assert.equal(b.$('batch-task-lock').hidden,true);
+    const running=b.$('batch-start').onclick();await until(()=>env.calls===1);
+    assert.equal(b.$('batch-task-lock').hidden,false);assert.equal(b.$('batch-workflow').disabled,true);assert.equal(b.$('batch-change-task').disabled,false);
+    assert.match(b.$('batch-change-task').textContent,/Pause to change/);b.$('batch-change-task').onclick();env.jobs.get('job-1').state='complete';await running;
+    assert.equal(env.calls,1);assert.match(b.$('batch-task-lock-copy').textContent,/2 CSV rows \(1 unfinished\) and 1 buffered video\./);
+    b.w.confirm=()=>false;await b.$('batch-change-task').onclick();assert.ok(await b.state());assert.equal(b.$('batch-workflow').disabled,true);
+    b.w.confirm=text=>{assert.match(text,/Discard this batch/);assert.match(text,/files already saved to your computer are kept/);return true;};
+    await b.$('batch-change-task').onclick();assert.equal(await b.state(),null);assert.equal(b.$('batch-workflow').disabled,false);assert.equal(b.$('batch-task-lock').hidden,true);assert.equal(b.$('batch-csv').hidden,false);
+    b.$('batch-workflow').value='existing';b.$('batch-workflow').onchange();assert.equal(b.$('batch-existing-wrap').hidden,false);assert.equal(env.calls,1);assert.equal(env.downloads.length,0);
+  }finally{b.close();}
+});
 
 test('existing-folder review matches the CSV, uploads three files, uses only fal for review and checkpoints classified results',async()=>{
   const env=environment();env.keys={fal:true,kie:false};env.review={verdict:'pass',summary:'No major issues',redoCount:0,attempts:[]};let b=await browser(env);
@@ -211,11 +242,18 @@ test('folder save refuses existing outputs and resumes saving without another ge
     if(create)outputs.set(name,Buffer.alloc(0));
     return {createWritable:async()=>new WritableStream({write:chunk=>outputs.set(name,Buffer.concat([outputs.get(name),Buffer.from(chunk)]))})};
   },removeEntry:async name=>outputs.delete(name)};
-  const b=await browser(env,{folder});
+  let b=await browser(env,{folder});
   try{
     await b.load('a.mp4,b.mp4,out.mp4');b.$('batch-destination').value='folder';b.$('batch-destination').onchange();await b.$('batch-output-folder').onclick();
+    assert.equal(b.$('batch-destination-info').textContent,'results');assert.match(b.$('batch-destination-detail').textContent,/does not share the full path/);
+    b.$('batch-path-label').value='C:\\Videos\\results';b.$('batch-path-label').oninput();assert.match(b.$('batch-destination-detail').textContent,/Path label \(provided by you\): C:\\Videos\\results/);
     await b.$('batch-start').onclick();assert.equal(env.calls,1);assert.equal((await b.state()).rows[0].state,'saving');assert.equal(outputs.get('out.mp4').toString(),'existing');
+    assert.equal((await b.state()).destinationPathLabel,'C:\\Videos\\results');assert.ok(!JSON.stringify(env.submissions).includes('Videos'));
+    b.close();b=await browser(env,{folder});assert.equal(b.$('batch-destination-info').textContent,'results');assert.match(b.$('batch-destination-label').textContent,/Reselect/);assert.equal(b.$('batch-path-label').disabled,true);
+    await b.$('batch-start').onclick();assert.match(b.$('batch-status').textContent,/Choose an output folder/);assert.equal(env.calls,1);
+    await b.$('batch-output-folder').onclick();assert.equal(b.$('batch-path-label').value,'');
     outputs.delete('out.mp4');await b.$('batch-start').onclick();assert.equal(env.calls,1);assert.equal((await b.state()).rows[0].state,'saved');assert.equal(outputs.get('out.mp4').toString(),'test-video');
+    await b.$('batch-change-task').onclick();assert.equal(outputs.get('out.mp4').toString(),'test-video');assert.equal(await b.state(),null);
   }finally{b.close();}
 });
 
@@ -226,6 +264,7 @@ test('cancel stops at the current row, and a second tab cannot edit or start a r
     const running=a.$('batch-start').onclick();await until(()=>env.calls===1);
     await b.$('batch-start').onclick();assert.match(b.$('batch-status').textContent,/another tab/);assert.equal(env.calls,1);
     await b.$('batch-reset').onclick();assert.equal((await b.state()).rows.length,2);
+    await b.$('batch-change-task').onclick();assert.equal((await b.state()).rows.length,2);assert.match(b.$('notifications').textContent,/another tab/);
     a.$('batch-cancel').onclick();await running;assert.equal((await a.state()).rows[0].state,'cancelled');assert.equal((await a.state()).rows[1].state,'pending');assert.equal(env.calls,1);
     env.pending=false;await b.$('batch-start').onclick();assert.equal(env.calls,2);assert.equal((await b.state()).rows[0].state,'cancelled');assert.equal((await b.state()).rows[1].state,'buffered');
   }finally{a.close();b?.close();}

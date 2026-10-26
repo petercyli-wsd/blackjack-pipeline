@@ -4,7 +4,7 @@ let reviewMode='preview',defaultPrompt='',batchContext={active:false,hasGenerati
 const selectedMethod=()=>methods.find(m=>m.id===$('method').value);
 const qualitySettings=()=>({mode:$('quality-mode').value,maxRetries:Number($('quality-retries').value),appearance:$('quality-appearance').value});
 const hasPendingKeys=()=>!!($('fal-key').value.trim()||$('kie-key').value.trim());
-const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);};
+const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);if(error)window.StudioNotice.show({id:'single',message:text,kind:'error',target:'status'});else window.StudioNotice.dismiss('single');};
 const fail=e=>status(e.message.replace(/^Error invoking remote method '[^']+': Error: /,''),true);
 function renderFailure(e){
   fail(e);$('result-status').textContent=e.canResume?'CONNECTION INTERRUPTED':result?'PREVIOUS RESULT':'JOB STOPPED';
@@ -107,12 +107,13 @@ function showResult(){
   $('preview').setAttribute('aria-pressed',String(!full));$('full').setAttribute('aria-pressed',String(full));
 }
 function receiveResult(r){
+  window.StudioNotice.dismiss('quality');
   $('reconnect-render')?.remove();
   result=r;reviewMode='preview';$('comparison').value='transition';$('empty').hidden=true;$('result').hidden=false;$('anchors').hidden=false;$('anchor-a').src=r.frames[0];$('anchor-b').src=r.frames[1];
   for(const id of ['preview','full','export','reveal','comparison'])$(id).disabled=false;
   showResult();$('result-status').textContent='READY TO REVIEW';
   $('quality-result').hidden=!r.review;$('quality-report').hidden=!r.review;
-  if(r.review){$('result-status').textContent=r.review.verdict==='pass'?'AI REVIEW PASSED':'NEEDS HUMAN REVIEW';$('quality-result').textContent=`${r.review.verdict==='pass'?'AI review passed':'Needs review'}: ${r.review.summary} (${r.review.redoCount} redos). `+r.review.attempts.flatMap(a=>(a.assessment?.issues||[]).map(i=>`Attempt ${a.attempt}, ${i.time.toFixed(2)}s: ${i.evidence}`)).join(' ');}
+  if(r.review){$('result-status').textContent=r.review.verdict==='pass'?'AI REVIEW PASSED':'NEEDS HUMAN REVIEW';$('quality-result').textContent=`${r.review.verdict==='pass'?'AI review passed':'Needs review'}: ${r.review.summary} (${r.review.redoCount} redos). `+r.review.attempts.flatMap(a=>(a.assessment?.issues||[]).map(i=>`Attempt ${a.attempt}, ${i.time.toFixed(2)}s: ${i.evidence}`)).join(' ');if(r.review.verdict!=='pass')window.StudioNotice.show({id:'quality',message:r.review.summary,target:'quality-result'});}
 }
 $('quality-report').onclick=()=>{if(!result?.review)return;const a=document.createElement('a'),url=URL.createObjectURL(new Blob([JSON.stringify(result.review,null,2)],{type:'application/json'}));a.href=url;a.download='quality-report.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);};
 for(const id of ['quality-mode','quality-retries','quality-appearance'])$(id).addEventListener('change',readiness);
@@ -123,7 +124,7 @@ $('clear-results').onclick=async()=>{
   if(busy||importing||!confirm('Permanently discard all single-pair renders in this session without downloading? Source uploads, API keys and batch progress are kept.'))return;
   setBusy(true);
   try{
-    await window.studio.clearResults();result=null;reviewMode='preview';
+    await window.studio.clearResults();result=null;reviewMode='preview';window.StudioNotice.dismiss('quality');
     $('result').pause();$('result').removeAttribute('src');$('result').load();$('result').hidden=true;
     $('empty').hidden=false;$('anchors').hidden=true;
     for(const id of ['anchor-a','anchor-b'])$(id).removeAttribute('src');

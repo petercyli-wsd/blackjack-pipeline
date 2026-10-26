@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<aside id="notifications" aria-label="Notifications"></aside>
 <header>
   <div class="brand" aria-hidden="true">&#9672;</div>
   <div class="brand-copy"><h1>Dealer Transition Studio</h1><p>Two clips. One continuous performance.</p></div>
@@ -79,7 +80,8 @@
     </article>
     <article class="card batch-panel" id="batch-panel" hidden>
       <div class="section-label"><h2>Process a CSV batch</h2><span class="badge">UP TO 10,000 PAIRS</span></div>
-      <label>Batch task<select id="batch-workflow"><option value="generate">Generate from source clips</option><option value="existing">Review an existing output folder (optionally redo)</option></select></label>
+      <label>Batch task<select id="batch-workflow" aria-describedby="batch-task-lock-copy"><option value="generate">Generate from source clips</option><option value="existing">Review an existing output folder (optionally redo)</option></select></label>
+      <section id="batch-task-lock" class="task-lock" hidden aria-labelledby="batch-task-lock-title"><div><h3 id="batch-task-lock-title">Task locked to this batch</h3><p id="batch-task-lock-copy"></p></div><button id="batch-change-task" class="danger-quiet">Discard batch &amp; change task</button></section>
       <div id="batch-existing-wrap" hidden><label>Select existing output folder<input id="batch-existing-folder" type="file" webkitdirectory multiple></label><p id="batch-existing-info" class="help">Match files using the CSV output column, relative to this folder. Select full A + bridge + B outputs, not bridge-only files. Also select the source folder below. Set the original method/duration in the CSV if you want automatic redos.</p></div>
       <p class="help">Every row produces the full first video + bridge + full second video. Dissolve overlaps the clips instead. Optional CSV method and duration override the panel defaults. FPS, movement instructions and mute are shared. Rows run in CSV order, one at a time. Resolved settings and CSV roots freeze at the first start; clear the CSV to start a new batch with different settings.</p>
       <p class="help" id="batch-settings-summary" role="status"></p>
@@ -93,7 +95,8 @@
       </details>
       <details open><summary>2. Choose where results go</summary>
         <label>Output destination<select id="batch-destination"><option value="zip">ZIP parts (all modern browsers)</option><option value="folder">Save directly to a folder (supported browsers)</option></select></label>
-        <div class="actions"><button id="batch-output-folder">Choose output folder</button><span id="batch-destination-info" class="help">ZIPs keep relative output folders and filenames.</span></div>
+        <div class="destination-card"><div class="destination-copy"><span id="batch-destination-label" class="destination-label">Download destination</span><strong id="batch-destination-info">ZIP parts</strong><p id="batch-destination-detail">ZIPs keep relative output folders and filenames.</p></div><button id="batch-output-folder">Choose output folder</button></div>
+        <details id="batch-path-label-wrap" hidden><summary>Add a full path label (optional)</summary><label for="batch-path-label">Full path label &mdash; display only</label><input id="batch-path-label" type="text" maxlength="1000" spellcheck="false" placeholder="Paste the folder path from File Explorer or Finder" aria-describedby="batch-path-help"><p id="batch-path-help" class="help">The browser shares the folder name, not its full path. Paste a path here if useful; this label does not change where files are saved. Use Change folder to select the actual destination.</p></details>
       <p class="help">For continuous saving, choose folder mode: each finished MP4 goes directly to disk. ZIP mode pauses after 20 files or 250 MB; download and confirm each part, or explicitly discard it to continue. Existing files are never overwritten.</p>
       <p class="help">With review enabled, approved videos go into <code>approved/</code>; anything still needing inspection goes into <code>needs-review/</code>. Select a new destination folder. Original imported files are never modified. Download the row report for verdicts, evidence, attempts and request IDs.</p>
       </details>
@@ -127,6 +130,6 @@
   </section>
   <footer>Try FILM or RIFE for a small pose gap; Kling or Seedance for new motion. Inspect fingers, cards and chips at both joins.</footer>
 </main>
-<script src="browser.js"></script><script src="frame-rate.js"></script><script src="renderer.js"></script><script src="batch-format.js"></script><script src="batch-settings.js"></script><script src="batch-zip.js"></script><script src="batch-estimates.js"></script><script src="batch.js"></script>
+<script src="notices.js"></script><script src="browser.js"></script><script src="frame-rate.js"></script><script src="renderer.js"></script><script src="batch-format.js"></script><script src="batch-settings.js"></script><script src="batch-zip.js"></script><script src="batch-estimates.js"></script><script src="batch.js"></script>
 </body>
 </html>

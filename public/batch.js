@@ -7,8 +7,8 @@
   const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   let queue=null,files=new Map(),foldedFiles=new Map(),destination=null,running=false,stopAfter=false,cancelled=false,uploadController=null,page=0,downloaded=false;
   let buffered=[],db,available=false,editing=false,existingFiles=new Map();
-  const message=(text,error=false)=>{$('batch-status').textContent=text;$('batch-status').classList.toggle('error',error);};
-  const ids=['batch-workflow','batch-existing-folder','batch-csv','batch-folder','batch-input-root','batch-output-root','batch-destination','batch-output-folder','batch-validate','batch-start','batch-reset','batch-retry','batch-skip','batch-download','batch-ack','batch-discard','batch-unit-cost','batch-cost-unit','mode-single','mode-batch'];
+  const message=(text,error=false,notice)=>{$('batch-status').textContent=text;$('batch-status').classList.toggle('error',error);if(error||notice)window.StudioNotice.show({id:'batch',message:text,kind:error?'error':'warning',target:'batch-status'});else window.StudioNotice.dismiss('batch');};
+  const ids=['batch-workflow','batch-existing-folder','batch-csv','batch-folder','batch-input-root','batch-output-root','batch-destination','batch-output-folder','batch-path-label','batch-validate','batch-start','batch-reset','batch-retry','batch-skip','batch-download','batch-ack','batch-discard','batch-unit-cost','batch-cost-unit','mode-single','mode-batch'];
   function lock(value){running=value;ui.lock(value);for(const id of ids)$(id).disabled=value;$('batch-pause').disabled=!value;$('batch-cancel').disabled=!value;render();}
   const storage=new Promise((resolve,reject)=>{
     const request=indexedDB.open('dealer-transition-batches',1);
@@ -40,6 +40,16 @@
   ]);}
   function mode(batch){if(running)return;document.body.classList.toggle('batch-mode',batch);$('batch-panel').hidden=!batch;$('mode-batch').setAttribute('aria-pressed',String(batch));$('mode-single').setAttribute('aria-pressed',String(!batch));render();}
   $('mode-single').onclick=()=>mode(false);$('mode-batch').onclick=()=>mode(true);
+  function renderDestination(){
+    const folder=$('batch-destination').value==='folder',name=destination?.name||queue?.destinationName;
+    $('batch-path-label-wrap').hidden=!folder;
+    $('batch-path-label').disabled=running||editing||!destination;
+    $('batch-output-folder').textContent=destination?'Change folder':name?'Reselect output folder':'Choose output folder';
+    $('batch-destination-label').textContent=folder?(destination?'Selected output folder':name?'Reselect this folder to resume':'Output folder not selected'):'Download destination';
+    $('batch-destination-info').textContent=folder?(name||'Choose a folder on your computer'):'ZIP parts';
+    const label=$('batch-path-label').value.trim();
+    $('batch-destination-detail').textContent=!folder?'ZIPs keep the CSV output folders and filenames.':destination?(label?`Path label (provided by you): ${label}`:'On your computer. The browser does not share the full path.')+(queue?.settings?.review?.mode&&queue.settings.review.mode!=='off'?' Results go into approved/ or needs-review/.':''):name?'Browser access needs to be granted again after a refresh. Choose the intended output folder before resuming.':'Each completed video will be saved here automatically.';
+  }
   function render(){
     $('batch-existing-wrap').hidden=$('batch-workflow').value!=='existing';
     $('batch-csv').hidden=!!queue;
@@ -50,10 +60,16 @@
     $('batch-start').disabled=running||editing||!available||!queue;$('batch-output-folder').disabled=running||editing||$('batch-destination').value!=='folder'||!window.showDirectoryPicker;
     for(const id of ['batch-input-root','batch-output-root'])$(id).disabled=running||editing||!!queue?.settings;
     $('batch-workflow').disabled=running||editing||!!queue?.settings;
+    $('batch-task-lock').hidden=!queue?.settings;
+    const unfinished=queue?.rows.filter(r=>!terminal.includes(r.state)).length||0;
+    $('batch-task-lock-copy').textContent=queue?.settings?`${running?'Pause after the current row before changing tasks.':'This task and its settings belong to the current batch.'} To choose another task, discard this batch: ${queue.rows.length} CSV row${queue.rows.length===1?'':'s'} (${unfinished} unfinished) and ${buffered.length} buffered video${buffered.length===1?'':'s'}. Files already saved on your computer are kept. You will need to load a CSV again.`:'';
+    $('batch-change-task').textContent=running?(stopAfter?'Pausing after this row...':'Pause to change task'):'Discard batch & change task';
+    $('batch-change-task').disabled=running?stopAfter||cancelled:editing||!queue;
     $('batch-pause').hidden=!running;$('batch-cancel').hidden=!running;
     $('batch-zip-actions').hidden=!buffered.length;
     $('batch-discard').disabled=running||editing||!buffered.length;
     $('batch-output-folder').hidden=$('batch-destination').value!=='folder';
+    renderDestination();
     $('batch-retry').disabled=running||editing||!queue?.rows.some(r=>retryStates.includes(r.state));
     $('batch-skip').disabled=running||editing||!queue?.rows.some(r=>['uncertain',...pauseStates].includes(r.state));
     for(const id of ['batch-report','batch-reset'])$(id).disabled=running||editing||!queue;
@@ -131,13 +147,14 @@
       const file=$('batch-csv').files[0];if(!file)return;if(file.size>20*1048576)throw new Error('CSV limit: 20 MB.');
       const records=BatchFormat.parseCSV(await file.text());
       queue={id:crypto.randomUUID(),csvName:file.name,columns:records.columns,warnings:records.warnings,created:new Date().toISOString(),part:1,inputRoot:$('batch-input-root').value,outputRoot:$('batch-output-root').value,rows:BatchFormat.prepare(records,$('batch-input-root').value,$('batch-output-root').value).map((r,i)=>({...r,id:crypto.randomUUID(),fields:records[i]}))};
-      if(files.size)match();await checkpoint({allRows:true});render();message('CSV loaded. Validate file matching, choose the method and destination, then start.');
+      if(files.size)match();await checkpoint({allRows:true});render();message('CSV loaded. Validate file matching, choose the method and destination, then start.'+(queue.warnings?.length?' '+queue.warnings.join(' '):''),false,!!queue.warnings?.length);
     }catch(e){queue=previousQueue;message(e.message,true);}finally{$('batch-csv').value='';render();}
   };
-  $('batch-validate').onclick=async()=>{try{match();await checkpoint({allRows:true});message(`Validation complete: ${queue.rows.filter(r=>r.state==='pending').length} ready, ${queue.rows.filter(r=>r.state==='invalid').length} invalid. Invalid rows will be skipped; review their errors below.`);}catch(e){message(e.message,true);}};
+  $('batch-validate').onclick=async()=>{try{match();await checkpoint({allRows:true});const invalid=queue.rows.filter(r=>r.state==='invalid').length;message(`Validation complete: ${queue.rows.filter(r=>r.state==='pending').length} ready, ${invalid} invalid. Invalid rows will be skipped; review their errors below.`,false,invalid>0);}catch(e){message(e.message,true);}};
   $('batch-template').onclick=()=>download(new Blob(['first_half,second_half,output,method,duration\r\ntable-01/first.mp4,table-01/second.mp4,film.mp4,film,0.33\r\ntable-02/first.mp4,table-02/second.mp4,kling.mp4,kling-fal,3\r\ntable-03/first.mp4,table-03/second.mp4,panel.mp4,,\r\n'],{type:'text/csv'}),'batch-example.csv');
-  $('batch-destination').onchange=()=>{render();$('batch-destination-info').textContent=$('batch-destination').value==='folder'?(destination?`Output folder: ${destination.name}`:'Choose a dedicated empty output folder.'):'ZIPs keep relative output folders and filenames.';};
-  $('batch-output-folder').onclick=async()=>{try{destination=await window.showDirectoryPicker({mode:'readwrite',id:'studio-batch-output'});$('batch-destination-info').textContent=`Output folder: ${destination.name}`;}catch(e){if(e.name!=='AbortError')message(e.message,true);}};
+  $('batch-destination').onchange=render;
+  $('batch-path-label').oninput=renderDestination;
+  $('batch-output-folder').onclick=async()=>{try{const picked=await window.showDirectoryPicker({mode:'readwrite',id:'studio-batch-output',...(destination?{startIn:destination}:{})});destination=picked;$('batch-path-label').value='';renderDestination();}catch(e){if(e.name!=='AbortError')message(e.message,true);}};
   for(const id of ['batch-unit-cost','batch-cost-unit'])$(id).oninput=()=>{render();};
   $('method').addEventListener('change',render);
   window.addEventListener('studio:ready',render);
@@ -253,7 +270,7 @@
       for(const row of queue.rows)if(!row.resolvedSettings){try{row.resolvedSettings=BatchSettings.resolve(row,settings,init.methods);}catch{/* Invalid rows remain skipped, with the original validation error. */}}
       queue.settings=settings;
       queue.workflow=workflow;
-      queue.destination=$('batch-destination').value;queue.unitCost=$('batch-unit-cost').value;queue.costUnit=$('batch-cost-unit').value;await checkpoint({allRows:true});
+      queue.destination=$('batch-destination').value;queue.destinationName=destination?.name||queue.destinationName;queue.destinationPathLabel=$('batch-path-label').value.trim();queue.unitCost=$('batch-unit-cost').value;queue.costUnit=$('batch-cost-unit').value;await checkpoint({allRows:true});
       await cleanPrevious();
       if(queue.rows.some(r=>r.state==='uncertain'))throw new Error('Review interrupted rows, then explicitly retry or skip them before continuing.');
       while(!stopAfter){
@@ -271,13 +288,13 @@
             row.state='failed';row.error=e.message;await checkpoint({row});await release(row);
           }else{row.error=e.message;await checkpoint({row});throw e;}
         }
-        render();if(buffered.length>=20||buffered.reduce((n,x)=>n+x.blob.size,0)>=250*1048576){message('ZIP part ready. Download it and confirm ZIP saved, or discard buffered outputs before resuming. Choose folder mode for continuous saving.');return;}
+        render();if(buffered.length>=20||buffered.reduce((n,x)=>n+x.blob.size,0)>=250*1048576){message('ZIP part ready. Download it and confirm ZIP saved, or discard buffered outputs before resuming. Choose folder mode for continuous saving.',false,true);return;}
       }
-      message(stopAfter?'Batch paused. Saved outputs are retained; resume when ready.':`Batch finished. ${buffered.length?'Download and confirm the remaining ZIP part. ':''}Check the row report for skipped or failed items.`);
+      message(stopAfter?'Batch paused. Saved outputs are retained; resume when ready.':`Batch finished. ${buffered.length?'Download and confirm the remaining ZIP part. ':''}Check the row report for skipped or failed items.`,false,stopAfter||buffered.length>0||queue.rows.some(r=>['failed','invalid','uncertain'].includes(r.state)||r.result?.review?.verdict==='needs_review'));
     }finally{uploadController=null;lock(false);}
   }
   $('batch-start').onclick=run;
-  $('batch-pause').onclick=()=>{stopAfter=true;$('batch-pause').disabled=true;message('Will pause after saving the current row.');};
+  $('batch-pause').onclick=()=>{stopAfter=true;$('batch-pause').disabled=true;render();message('Will pause after saving the current row.');};
   $('batch-cancel').onclick=()=>{
     cancelled=true;stopAfter=true;uploadController?.abort();$('batch-cancel').disabled=true;
     const row=queue?.rows.find(r=>pauseStates.includes(r.state));if(row?.attempt)api('/api/batch/cancel','POST',{rowId:row.attempt}).catch(()=>{});
@@ -322,14 +339,16 @@
     }catch(e){message(e.message,true);}
   }
   $('batch-retry').onclick=()=>resolveRows(true);$('batch-skip').onclick=()=>resolveRows(false);
-  $('batch-reset').onclick=async()=>{
-    if(running||!queue||!confirm(`Clear ${queue.csvName||'the loaded CSV'} and its ${queue.rows.length} batch rows? This permanently removes batch progress and ${buffered.length} buffered output videos without downloading. Save anything you want to keep first. Your original CSV, source videos and files already saved to your computer are kept.`))return;
+  async function clearBatch(changeTask=false){
+    if(running||!queue||!confirm(`${changeTask?'Discard this batch to choose a different task?\n\n':''}Clear ${queue.csvName||'the loaded CSV'} and its ${queue.rows.length} batch rows? This permanently removes batch progress and ${buffered.length} buffered output videos without downloading. Save anything you want to keep first. Your original CSV, source videos and files already saved to your computer are kept.`))return;
     const previous=queue;
     try{
       const current=await api('/api/batch');if(current.rowId)await api('/api/batch/release','POST',{rowId:current.rowId});
-      queue=null;await checkpoint({clear:true});buffered=[];downloaded=false;page=0;$('batch-csv').value='';$('batch-rows').replaceChildren();$('batch-metrics').textContent='No CSV loaded.';$('batch-progress').value=0;$('batch-page').textContent='';render();message('CSV and batch checkpoint cleared. Choose another CSV to begin.');
+      queue=null;await checkpoint({clear:true});buffered=[];downloaded=false;page=0;$('batch-csv').value='';$('batch-rows').replaceChildren();$('batch-metrics').textContent='No CSV loaded.';$('batch-progress').value=0;$('batch-page').textContent='';render();message(changeTask?'Batch discarded. Choose your new Batch task above, then load its CSV.':'CSV and batch checkpoint cleared. Choose another CSV to begin.');
+      if(changeTask)setTimeout(()=>{$('batch-workflow').scrollIntoView?.({block:'center',behavior:'instant'});$('batch-workflow').focus();},0);
     }catch(e){queue=previous;render();message(e.message,true);}
-  };
+  }
+  $('batch-reset').onclick=()=>clearBatch();
   // All persistent edits share one origin-wide lease. Refresh the checkpoint under
   // that lease so an idle second tab cannot resubmit rows completed in the first.
   function exclusive(handler){return async event=>{
@@ -345,13 +364,15 @@
     }catch(e){message(`Paused: ${e.message}`,true);}finally{editing=false;render();}
   };}
   for(const id of ['batch-start','batch-validate','batch-download','batch-ack','batch-retry','batch-skip','batch-reset','batch-discard'])$(id).onclick=exclusive($(id).onclick);
+  const discardForTask=exclusive(()=>clearBatch(true));
+  $('batch-change-task').onclick=()=>running?$('batch-pause').onclick():discardForTask();
   $('batch-csv').onchange=exclusive($('batch-csv').onchange);
   window.addEventListener('beforeunload',event=>{if(running){event.preventDefault();event.returnValue='';}});
   storage.then(async value=>{
     db=value;queue=await readQueue();buffered=await allOutputs();available=true;
     if(queue){
-      $('batch-input-root').value=queue.inputRoot||'';$('batch-output-root').value=queue.outputRoot||'';$('batch-destination').value=queue.destination||'zip';$('batch-unit-cost').value=queue.unitCost||'';$('batch-cost-unit').value=queue.costUnit||'USD';$('batch-workflow').value=queue.workflow||'generate';
-      mode(true);message('Batch checkpoint restored. Reselect folders and enter keys if needed, then resume. Existing ZIP buffers are available below.');
+      $('batch-input-root').value=queue.inputRoot||'';$('batch-output-root').value=queue.outputRoot||'';$('batch-destination').value=queue.destination||'zip';$('batch-path-label').value=queue.destinationPathLabel||'';$('batch-unit-cost').value=queue.unitCost||'';$('batch-cost-unit').value=queue.costUnit||'USD';$('batch-workflow').value=queue.workflow||'generate';
+      mode(true);message('Batch checkpoint restored. Reselect folders and enter keys if needed, then resume.'+(queue.settings?' To change tasks, use Discard batch & change task beside the locked selector.':''),false,true);
     }
     if(!window.showDirectoryPicker){$('batch-destination').querySelector('[value=folder]').disabled=true;$('batch-destination').value='zip';}
     render();
