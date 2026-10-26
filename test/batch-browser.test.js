@@ -6,6 +6,7 @@ const path=require('node:path');
 const {JSDOM}=require('jsdom');
 const {IDBFactory,IDBObjectStore}=require('fake-indexeddb');
 const {METHODS,DEFAULT_PROMPT}=require('../src/models');
+const {DECISION_POLICY}=require('../src/validation');
 const {memoryFolder}=require('./helpers/memory-folder');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const publicDir=path.join(__dirname,'../public');
@@ -78,9 +79,24 @@ test('restored review rows explain low confidence separately from service errors
     await setupRepair(b,'a.mp4,b.mp4,one.mp4\na.mp4,b.mp4,two.mp4\na.mp4,b.mp4,error.mp4');await b.$('batch-start').onclick();assert.equal(env.calls,3);
     const before=await b.state();b.close();b=await browser(env,{folder:folder.root});
     const rows=b.$('batch-rows').children;assert.match(rows[0].textContent,/Confidence 75% is below the 85% threshold/);assert.match(rows[1].textContent,/Confidence 80% is below the 85% threshold/);
+    assert.match(rows[0].textContent,/earlier 85% policy/);assert.match(rows[1].textContent,/earlier 85% policy/);
     assert.match(rows[2].textContent,/Review error \(not a visual verdict\)/);assert.doesNotMatch(rows[2].textContent,/Confidence 0%/);
     assert.match(b.$('batch-metrics').textContent,/2 need human review \| 1 review\/redo errors/);assert.deepEqual(await b.state(),before);assert.equal(env.calls,3);
     assert.equal(await folder.text('one.mp4'),'one');assert.equal(await folder.text('two.mp4'),'two');assert.equal(await folder.text('error.mp4'),'error');
+  }finally{b.close();}
+});
+
+test('prototype review results survive refresh without applying the old approval gate or rewriting originals',async()=>{
+  const folder=memoryFolder({'clean.mp4':'clean-original','uncertain.mp4':'uncertain-original'}),env=environment();
+  env.review=n=>({decisionPolicy:DECISION_POLICY,verdict:n===1?'pass':'needs_review',summary:n===1?'No distracting defect.':'Card occlusion is unresolved.',selectedAttempt:0,redoCount:0,pauseBatch:false,attempts:[{attempt:0,source:'existing',assessment:{verdict:n===1?'pass':'uncertain',modelVerdict:n===1?'pass':'uncertain',confidence:.8,issues:[]}}]});
+  let b=await browser(env,{folder:folder.root});
+  try{
+    await setupRepair(b,'a.mp4,b.mp4,clean.mp4\na.mp4,b.mp4,uncertain.mp4');await b.$('batch-start').onclick();
+    const before=await b.state();b.close();b=await browser(env,{folder:folder.root});
+    const rows=b.$('batch-rows').children;assert.match(rows[0].textContent,/Approved: No distracting defect/);assert.match(rows[1].textContent,/Needs review: Card occlusion is unresolved/);
+    assert.doesNotMatch(b.$('batch-rows').textContent,/85%|below.*threshold/);
+    assert.match(b.$('batch-metrics').textContent,/1 approved \| 1 need human review/);assert.deepEqual(await b.state(),before);assert.equal(env.calls,2);
+    assert.equal(await folder.text('clean.mp4'),'clean-original');assert.equal(await folder.text('uncertain.mp4'),'uncertain-original');
   }finally{b.close();}
 });
 

@@ -67,6 +67,7 @@
         <h3 id="quality-title">Quality review</h3>
         <label>After generation<select id="quality-mode"><option value="off">Off — manual inspection</option><option value="review">AI review — flag problems</option><option value="redo">AI review + automatic redos</option></select></label>
         <p class="help">Uses your fal key for Claude Opus 5.5 visual review of reference images and timestamped frames across the bridge and both joins. Two independent checks must agree before an automatic redo. Uncertain results need a person; AI approval is not a guarantee.</p>
+        <p class="help"><strong>Prototype tolerance:</strong> a clean pass needs at least 70% confidence. A major defect still blocks approval; automatic redos require 85% confidence from both checks. Minor imperfections alone are acceptable. Updated thresholds apply to new reviews, including pending rows when you resume. Earlier saved flags keep their original verdict.</p>
         <details><summary>Redo limit &amp; appearance policy</summary>
           <label>Maximum extra generations per row<select id="quality-retries"><option value="1">1 redo</option><option value="2">2 redos</option><option value="0">0 — review only</option></select></label>
           <label>Appearance policy<select id="quality-appearance"><option value="strict">Keep identity, appearance and geometry</option><option value="reskin">Later reskin: tolerate cosmetic texture/colour changes</option></select></label>

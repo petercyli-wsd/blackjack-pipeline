@@ -49,12 +49,13 @@
   function reviewDescription(review){
     const assessment=review.attempts?.find(a=>a.attempt===(review.selectedAttempt??0))?.assessment;
     if(assessment?.error)return `Review error (not a visual verdict): ${review.summary}`;
-    // Older checkpoints predate the explanation in the server summary. Show
-    // their confidence gate as well, without altering any stored verdict.
-    const low=review.verdict!=='pass'&&Number.isFinite(assessment?.confidence)&&assessment.confidence<.85;
+    // New summaries explain the asymmetric policy. Older saved results retain
+    // their original 85% gate; never reclassify a stored uncertain verdict.
+    const legacy=!review.decisionPolicy;
+    const low=legacy&&review.verdict!=='pass'&&Number.isFinite(assessment?.confidence)&&assessment.confidence<.85;
     const reason=low?`Confidence ${Math.floor(assessment.confidence*10000)/100}% is below the 85% threshold; manual review required.`:'';
     const summary=reason&&!review.summary?.startsWith(reason)?`${reason} ${review.summary}`:review.summary;
-    return `${review.verdict==='pass'?'Approved':'Needs review'}: ${summary}`;
+    return `${review.verdict==='pass'?'Approved':'Needs review'}${low?' (earlier 85% policy)':''}: ${summary}`;
   }
   const resolveRow=row=>BatchSettings.resolve(row,queue?.settings||ui.settings(),ui.methods());
   function previewSettings(row){try{return resolveRow(row);}catch{return null;}}

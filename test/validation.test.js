@@ -3,24 +3,41 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
 const path=require('node:path');
 const {ff,probe,processVideos}=require('../src/media');
-const {reviewOptions,parseReview,repairPrompt,sampleIndices,corroborate,runValidated,importedResult,evidenceFrames,reviewCandidate,ENDPOINT}=require('../src/validation');
+const {reviewOptions,parseReview,repairPrompt,sampleIndices,corroborate,runValidated,importedResult,evidenceFrames,reviewCandidate,ENDPOINT,DECISION_POLICY}=require('../src/validation');
 const {DEFAULT_PROMPT}=require('../src/models');
 const pass={verdict:'pass',confidence:.95,summary:'Continuous minimal movement.',issues:[]};
 const fail={confirmed:true,verdict:'fail',confidence:.95,summary:'Invented card transfer.',issues:[{category:'cards_objects',severity:'major',time:.5,evidence:'A packet appears under the hand and moves to the shoe.'}]};
 // Recorded final answer from the failed production request; no keys or image URLs.
 const omittedIssues=JSON.stringify(require('./fixtures/opus-pass-without-issues.json'));
 
-test('recorded Opus pass with omitted empty issues parses without weakening confidence or defect gates',()=>{
+test('recorded clean Opus pass is approved under prototype tolerance; malformed fields still fail closed',()=>{
   const result=parseReview(omittedIssues);
-  assert.equal(result.verdict,'uncertain');assert.equal(result.confidence,.8);assert.deepEqual(result.issues,[]);
-  assert.match(result.summary,/Confidence 80% is below the 85% threshold/);assert.equal(result.normalizations.length,1);
+  assert.equal(result.verdict,'pass');assert.equal(result.modelVerdict,'pass');assert.equal(result.confidence,.8);assert.deepEqual(result.issues,[]);
+  assert.doesNotMatch(result.summary,/below.*threshold/);assert.equal(result.normalizations.length,1);
   assert.equal(parseReview(JSON.stringify(result)).summary,result.summary);
-  assert.match(parseReview(JSON.stringify({...pass,confidence:.849})).summary,/Confidence 84.9% is below/);
+  assert.match(parseReview(JSON.stringify({...pass,confidence:.699})).summary,/Confidence 69.9% is below the 70% approval threshold/);
   assert.equal(parseReview(JSON.stringify({...JSON.parse(omittedIssues),confidence:.95})).verdict,'pass');
   for(const verdict of ['fail','uncertain'])assert.throws(()=>parseReview(JSON.stringify({verdict,confidence:.95,summary:'No issue list supplied.'})),/issues must be an array/);
   for(const issues of [null,{},'none',[{}]])assert.throws(()=>parseReview(JSON.stringify({...pass,issues})),/invalid/);
   for(const confidence of [undefined,null,'0.8',80,-.1])assert.throws(()=>parseReview(JSON.stringify({...pass,confidence})),/confidence must be a number/);
   for(const verdict of [undefined,null,'PASS','good'])assert.throws(()=>parseReview(JSON.stringify({...pass,verdict})),/verdict must be/);
+});
+
+test('prototype approval is lenient only for explicit clean passes; defect and uncertainty gates stay strict',()=>{
+  for(const confidence of [.7,.72,.75,.8,.85,.95]){
+    const minor={category:'appearance',severity:'minor',time:.5,evidence:'Slight uniform brightness drift.'};
+    for(const issues of [[],[minor]])assert.equal(parseReview(JSON.stringify({...pass,confidence,issues})).verdict,'pass');
+    assert.equal(parseReview(JSON.stringify({...pass,confidence,issues:fail.issues})).verdict,'uncertain');
+    assert.equal(parseReview(JSON.stringify({...pass,verdict:'uncertain',confidence})).verdict,'uncertain');
+  }
+  for(const confidence of [0,.69,.6999])assert.equal(parseReview(JSON.stringify({...pass,confidence})).verdict,'uncertain');
+  for(const confidence of [.7,.8,.8499]){
+    const result=parseReview(JSON.stringify({...fail,confidence}));
+    assert.equal(result.verdict,'uncertain');assert.equal(result.modelVerdict,'fail');assert.match(result.summary,/85% defect threshold/);
+  }
+  assert.equal(parseReview(JSON.stringify({...fail,confidence:.85})).verdict,'fail');
+  const disagreement=corroborate(parseReview(JSON.stringify(fail)),parseReview(JSON.stringify({...pass,confidence:.72})));
+  assert.equal(disagreement.confirmed,false);assert.equal(parseReview(JSON.stringify(disagreement)).verdict,'uncertain');
 });
 
 test('samples include adjacent join frames, remain bounded and require independently matching failure evidence',()=>{
@@ -62,7 +79,12 @@ test('review loop bounds paid redos, preserves the original on uncertainty/error
   r=await exercise([fail],{method:'film'});assert.equal(r.renders.length,1);
   r=await exercise([fail],{mode:'review'});assert.equal(r.renders.length,1);
   r=await exercise([new Error('bad review-secret')]);assert.equal(r.renders.length,1);assert.equal(r.result.review.pauseBatch,true);assert.ok(!JSON.stringify(r.result).includes('review-secret'));assert.ok((await fs.stat(r.result.output)).size>0);
-  r=await exercise([parseReview(omittedIssues)]);assert.equal(r.renders.length,1);assert.equal(r.result.review.pauseBatch,false);assert.equal(r.result.review.verdict,'needs_review');assert.match(r.result.review.summary,/Confidence 80%/);assert.equal(r.result.review.attempts[0].assessment.normalizations.length,1);
+  r=await exercise([parseReview(omittedIssues)]);assert.equal(r.renders.length,1);assert.equal(r.result.review.pauseBatch,false);assert.equal(r.result.review.verdict,'pass');assert.equal(r.result.review.attempts[0].assessment.normalizations.length,1);
+  assert.deepEqual(r.result.review.decisionPolicy,DECISION_POLICY);assert.equal(r.result.review.attempts[0].assessment.modelVerdict,'pass');
+  for(const assessment of [parseReview(JSON.stringify({...fail,confidence:.84})),{...pass,verdict:'uncertain',confidence:.8},corroborate(fail,{...pass,confidence:.72})]){
+    r=await exercise([assessment]);assert.equal(r.renders.length,1);assert.equal(r.result.review.verdict,'needs_review');assert.equal(r.result.review.pauseBatch,false);
+    if(assessment.modelVerdict)assert.equal(r.result.review.attempts[0].assessment.modelVerdict,assessment.modelVerdict);
+  }
   r=await exercise([fail],{renderError:true});assert.equal(r.renders.length,2);assert.equal(r.result.review.pauseBatch,true);assert.equal(r.result.review.verdict,'needs_review');assert.ok((await fs.stat(r.result.output)).size>0);
   r=await exercise([pass],{mode:'off'});assert.equal(r.assessments.length,0);assert.equal(r.result.review,undefined);
 });
@@ -92,7 +114,7 @@ test('real imported output yields exact timestamped samples; fal adapter submits
   for(const agree of [true,false]){
     let calls=0;const issue={...fail,issues:[{...fail.issues[0],time:Number(evidence.frames[3].time.toFixed(3))}]};
     const verified=await reviewCandidate(imported,{...o,method:'kling-fal',review:{mode:'redo',maxRetries:1}},{dir:path.join(root,`verify-${agree}`),key:'session-fal',signal,falClientFactory:()=>({storage:{upload:async()=> 'https://example.com/frame.jpg'},queue:{
-      submit:async(endpoint,payload)=>{assert.equal(payload.input.model,'anthropic/claude-opus-5.5');assert.equal(payload.input.reasoning,true);assert.ok(!Object.hasOwn(payload.input,'temperature'));return {request_id:`verification-${++calls}`};},status:async()=>({status:'COMPLETED'}),result:async()=>({data:{output:JSON.stringify(calls===1||agree?issue:pass),usage:{cost:.02}}})
+      submit:async(endpoint,payload)=>{assert.equal(payload.input.model,'anthropic/claude-opus-5.5');assert.equal(payload.input.reasoning,true);assert.ok(!Object.hasOwn(payload.input,'temperature'));return {request_id:`verification-${++calls}`};},status:async()=>({status:'COMPLETED'}),result:async()=>({data:{output:JSON.stringify(calls===1||agree?issue:{...pass,confidence:.72}),usage:{cost:.02}}})
     }})});
     assert.equal(calls,2);assert.equal(verified.verdict,agree?'fail':'uncertain');assert.equal(verified.confirmed,agree);assert.equal(verified.reportedCostUSD,.04);assert.equal(verified.checks.length,2);
   }
@@ -103,7 +125,8 @@ test('real imported output yields exact timestamped samples; fal adapter submits
   assert.equal(generates,0);assert.equal(unavailable.output,made.output);assert.equal(unavailable.review.pauseBatch,true);assert.equal(unavailable.review.selectedAttempt,0);assert.equal(unavailable.review.redoCount,0);
   assert.equal(unavailable.review.attempts.length,1);assert.equal(unavailable.review.attempts[0].source,'existing');assert.equal(unavailable.review.attempts[0].assessment.error,true);assert.match(unavailable.review.summary,/Reasoning is mandatory/);
   const replay=await runValidated(o,{dir:path.join(root,'existing-recorded-response'),candidate:made.output,reviewKey:'review-key',signal,renderVideo:async()=>{generates++;throw new Error('Must not generate');},reviewVideo:(result,options,context)=>reviewCandidate(result,options,{...context,falClientFactory:()=>({storage:{upload:async()=> 'https://example.com/frame.jpg'},queue:{submit:async()=>({request_id:'recorded-response'}),status:async()=>({status:'COMPLETED'}),result:async()=>({data:{output:omittedIssues}})}})})});
-  assert.equal(replay.review.pauseBatch,false);assert.equal(replay.review.verdict,'needs_review');assert.equal(replay.review.redoCount,0);assert.equal(generates,0);assert.equal(replay.output,made.output);assert.equal(replay.review.attempts[0].assessment.error,undefined);
+  assert.equal(replay.review.pauseBatch,false);assert.equal(replay.review.verdict,'pass');assert.equal(replay.review.redoCount,0);assert.equal(generates,0);assert.equal(replay.output,made.output);assert.equal(replay.review.attempts[0].assessment.error,undefined);
+  assert.deepEqual(replay.review.decisionPolicy,DECISION_POLICY);assert.equal(replay.review.attempts[0].assessment.modelVerdict,'pass');
   const malformed=await runValidated(o,{dir:path.join(root,'existing-malformed-response'),candidate:made.output,reviewKey:'review-key',signal,renderVideo:async()=>{generates++;throw new Error('Must not generate');},reviewVideo:(result,options,context)=>reviewCandidate(result,options,{...context,falClientFactory:()=>({storage:{upload:async()=> 'https://example.com/frame.jpg'},queue:{submit:async()=>({request_id:'invalid-response'}),status:async()=>({status:'COMPLETED'}),result:async()=>({data:{output:JSON.stringify({verdict:'fail',confidence:'90%',summary:'review-key'})}})}})})});
   assert.equal(malformed.review.pauseBatch,true);assert.match(malformed.review.summary,/confidence must be a number/);assert.equal(generates,0);
   assert.equal(malformed.review.attempts[0].assessment.diagnostics.requestId,'invalid-response');assert.match(malformed.review.attempts[0].assessment.diagnostics.output,/\[redacted\]/);assert.ok(!JSON.stringify(malformed).includes('review-key'));
