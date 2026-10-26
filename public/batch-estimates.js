@@ -30,12 +30,12 @@
       const p={...group,...estimate({...group,unitCost:mixed||reviewing?'':unitCost,unit,samples:reviewing?[]:bySettings.get(`${group.method}:${group.duration}`)||[]})};
       if(reviewing){
         const retries=review.mode==='redo'&&['kling-fal','kling-kie','seedance'].includes(group.method)?Math.min(2,Math.max(0,review.maxRetries||0)):0;
-        const reviewCost=[.01*group.rows,.15*group.rows];
+        const reviewCost=[.02*group.rows,.60*group.rows];
         const checks=retries?2:1;
         const initial=workflow==='existing'?0:1;
         p.cost=[initial*p.cost[0]+reviewCost[0],(initial+retries)*p.cost[1]+(1+retries)*checks*reviewCost[1]];
         p.time=[initial*p.time[0]+20*group.rows,(initial+retries)*p.time[1]+180*(1+retries)*checks*group.rows];
-        p.unit='USD';p.basis+=` Quality review: speculative $0.01-$0.15 per vision-model check, charged by tokens, not a verified tariff. Automatic-redo failures require two independent checks. Upper range assumes all ${retries} permitted redos per row and both checks; lower assumes none. Review time is speculative 20-180s per check. Overrides are ignored when review is enabled to avoid mixing currencies.`;
+        p.unit='USD';p.basis+=` Claude Opus 5.5 quality review: speculative $0.02-$0.60 per check, allowing for image tokens and adaptive thinking; not a verified fal tariff or spending cap. Automatic-redo failures require two independent checks. Upper range assumes all ${retries} permitted redos per row and both checks; lower assumes none. Review time is speculative 20-180s per check. Overrides are ignored when review is enabled to avoid mixing currencies.`;
       }
       return p;
     });

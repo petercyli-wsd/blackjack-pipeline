@@ -5,7 +5,7 @@ const {estimate,aggregate}=require('../public/batch-estimates');
 test('quality estimates include vision checks and bounded worst-case redos before starting',()=>{
   const groups=[{method:'kling-fal',duration:3,rows:4}];
   const basic=aggregate(groups),review=aggregate(groups,{review:{mode:'redo',maxRetries:2}}),existing=aggregate(groups,{workflow:'existing',review:{mode:'review',maxRetries:2}});
-  assert.ok(review.cost[0]>basic.cost[0]);assert.ok(review.cost[1]>basic.cost[1]*3);assert.ok(existing.cost[0]<basic.cost[0]);assert.equal(existing.cost[0],.04);assert.equal(existing.cost[1],.6);
+  assert.ok(review.cost[0]>basic.cost[0]);assert.ok(review.cost[1]>basic.cost[1]*3);assert.ok(existing.cost[0]<basic.cost[0]);assert.equal(existing.cost[0],.08);assert.equal(existing.cost[1],2.4);assert.match(existing.parts[0].basis,/Claude Opus 5\.5/);
   assert.match(review.parts[0].basis,/all 2 permitted redos/);
   const film=aggregate([{method:'film',duration:.4,rows:1}],{review:{mode:'redo',maxRetries:2},unit:'credits',unitCost:99});
   assert.match(film.parts[0].basis,/all 0 permitted redos/);assert.equal(film.unit,'USD');assert.ok(film.cost[1]<99);
