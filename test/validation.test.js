@@ -43,6 +43,7 @@ test('review loop bounds paid redos, preserves the original on uncertainty/error
   r=await exercise([fail]);assert.equal(r.renders.length,3);assert.equal(r.result.review.verdict,'needs_review');assert.equal(r.result.review.selectedAttempt,0);assert.match(r.result.output,/attempt-0/);
   r=await exercise([{...fail,confidence:.4}]);assert.equal(r.renders.length,1);assert.equal(r.result.review.verdict,'needs_review');
   r=await exercise([{...fail,confirmed:false}]);assert.equal(r.renders.length,1);
+  r=await exercise([{...fail,issues:[{category:'appearance',severity:'minor',time:.5,evidence:'Slight uniform brightness drift.'}]}]);assert.equal(r.renders.length,1);assert.equal(r.result.review.verdict,'needs_review');
   r=await exercise([fail],{method:'film'});assert.equal(r.renders.length,1);
   r=await exercise([fail],{mode:'review'});assert.equal(r.renders.length,1);
   r=await exercise([new Error('bad review-secret')]);assert.equal(r.renders.length,1);assert.equal(r.result.review.pauseBatch,true);assert.ok(!JSON.stringify(r.result).includes('review-secret'));assert.ok((await fs.stat(r.result.output)).size>0);

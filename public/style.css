@@ -8,6 +8,7 @@ body{margin:0}
 .toast-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}.toast-actions button{color:inherit;border-color:currentColor}
 .task-lock{display:flex;align-items:center;flex-wrap:wrap;gap:16px;margin-top:12px;padding:16px;border:1px solid #776342;border-radius:8px;background:#292820}
 .task-lock>div{flex:1;min-width:min(240px,100%)}.task-lock h3{color:#f2d59e}.task-lock p{font-size:13px;line-height:1.6;margin:8px 0 0;color:#ddd1bd}.task-lock button{align-self:center}
+#batch-replace-help{display:block}#batch-replace-help strong{color:#f2d59e}
 button.danger-quiet{background:transparent;border-color:#b17d72;color:#ffc7b9}button.danger-quiet:hover{background:#42302c}
 .destination-card{display:flex;align-items:center;flex-wrap:wrap;gap:16px;margin-top:14px;padding:18px;border:1px solid #48675f;border-radius:9px;background:#132a2a}
 .destination-copy{flex:1;min-width:min(250px,100%)}.destination-label{display:block;font-size:12px;font-weight:600;color:#b0ccbf;margin-bottom:6px}

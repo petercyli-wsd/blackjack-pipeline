@@ -6,6 +6,7 @@ const path=require('node:path');
 const {JSDOM}=require('jsdom');
 const {IDBFactory,IDBObjectStore}=require('fake-indexeddb');
 const {METHODS,DEFAULT_PROMPT}=require('../src/models');
+const {memoryFolder}=require('./helpers/memory-folder');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const publicDir=path.join(__dirname,'../public');
 async function until(check){for(let i=0;i<300;i++){if(await check())return;await delay(10);}throw new Error('Condition timed out');}
@@ -25,7 +26,7 @@ function environment(){
       if(env.workspace.jobId)return json({id:env.workspace.jobId},202);
       env.calls++;env.submissions.push(value);const id=`job-${env.calls}`;env.workspace.jobId=id;
       env.jobs.set(id,{id,state:env.failed?'failed':env.pending?'running':'complete',error:env.failed,messages:['Working'],providerJob:{provider:'fal',requestId:`provider-${env.calls}`},result:{url:'/media/'+id,bridgeDuration:Math.round(value.duration*24)/24,bridgeFrames:Math.round(value.duration*24),fpsRational:'24/1'}});
-      if(env.review){env.jobs.get(id).result.review=env.review;env.jobs.get(id).providerJobs=[{provider:'fal',requestId:'review-request',phase:'review'}];}
+      if(env.review){env.jobs.get(id).result.review=typeof env.review==='function'?env.review(env.calls):env.review;env.jobs.get(id).providerJobs=[{provider:'fal',requestId:'review-request',phase:'review'}];}
       if(env.lostResponse){env.lostResponse=false;throw new TypeError('Network disconnected after submission');}
       return json({id},202);
     }
@@ -40,13 +41,14 @@ function environment(){
 async function browser(env,{folder}={}){
   const dom=new JSDOM(fs.readFileSync(path.join(publicDir,'index.html'),'utf8'),{url:'http://studio.test',runScripts:'outside-only'}),w=dom.window,$=id=>w.document.getElementById(id);
   Object.assign(w,{indexedDB:env.indexedDB,fetch:env.fetch,Blob,TextEncoder,TextDecoder,structuredClone,confirm:()=>true,alert:()=>{}});
+  Object.defineProperty(w.crypto,'subtle',{value:require('node:crypto').webcrypto.subtle});
   w.navigator.locks={request:async(name,options,fn)=>{if(env.locked)return fn(null);env.locked=true;try{return await fn({name});}finally{env.locked=false;}}};
   w.URL.createObjectURL=blob=>{env.downloads.push(blob);return 'blob:test';};w.URL.revokeObjectURL=()=>{};w.HTMLAnchorElement.prototype.click=()=>{};
   w.HTMLMediaElement.prototype.pause=()=>{};w.HTMLMediaElement.prototype.load=()=>{};
   if(folder)w.showDirectoryPicker=async()=>folder;
   // Avoid 1.5-second polling waits; preserve asynchronous ordering.
   const timeout=w.setTimeout.bind(w);w.setTimeout=(fn,ms,...args)=>timeout(fn,ms===1500||ms===5000?1:ms,...args);
-  for(const name of ['notices.js','browser.js','frame-rate.js','renderer.js','batch-format.js','batch-settings.js','batch-zip.js','batch-estimates.js','batch.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
+  for(const name of ['notices.js','browser.js','frame-rate.js','renderer.js','batch-format.js','batch-settings.js','batch-zip.js','batch-estimates.js','batch-replace.js','batch.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
   await until(()=>$('method').options.length===METHODS.length&&!$('batch-csv').disabled).catch(e=>{throw new Error(`${e.message}: ${$('batch-status').textContent}; ${$('status').textContent}; methods=${$('method').options.length}`);});
   const selectFiles=()=>{
     Object.defineProperty($('batch-folder'),'files',{configurable:true,value:['a.mp4','b.mp4'].map(name=>({name,size:10,lastModified:1,webkitRelativePath:'videos/'+name}))});$('batch-folder').onchange();
@@ -55,6 +57,66 @@ async function browser(env,{folder}={}){
   const state=async()=>new Promise((resolve,reject)=>{const request=env.indexedDB.open('dealer-transition-batches',1);request.onsuccess=()=>{const db=request.result,tx=db.transaction(['meta','rows']),r=tx.objectStore('meta').get('queue'),rows=tx.objectStore('rows').getAll();tx.oncomplete=()=>{db.close();resolve(r.result?{...r.result,rows:rows.result.sort((a,b)=>a.number-b.number)}:null);};tx.onerror=()=>reject(tx.error);};});
   return {w,$,load,selectFiles,state,close:()=>w.close()};
 }
+
+async function setupRepair(b,csv){
+  b.$('batch-workflow').value='existing';b.$('batch-workflow').onchange();
+  b.$('quality-mode').value='redo';b.$('quality-retries').value='1';
+  b.$('batch-destination').value='replace';b.$('batch-destination').onchange();
+  await b.$('batch-output-folder').onclick();await b.load(csv);
+}
+
+test('in-place batch reviews every row and replaces only passed redos, preserving names, originals and reports',async()=>{
+  const folder=memoryFolder({'clean.mp4':'clean-original','sub/repair.mp4':'flawed-original','uncertain.mp4':'uncertain-original'}),env=environment(),b=await browser(env,{folder:folder.root});
+  env.review=n=>({verdict:n===3?'needs_review':'pass',selectedAttempt:n===2?1:0,summary:'Assessment',redoCount:n===2?1:0,attempts:[]});
+  try{
+    await setupRepair(b,'first_half,second_half,output,method,duration\na.mp4,b.mp4,clean.mp4,kling-fal,3\na.mp4,b.mp4,sub/repair.mp4,kling-fal,3\na.mp4,b.mp4,uncertain.mp4,kling-fal,3');
+    let confirmations=0;b.w.confirm=message=>{assert.match(message,/Only approved repairs/);confirmations++;return true;};
+    await b.$('batch-start').onclick();const q=await b.state();
+    assert.equal(env.calls,3);assert.equal(env.uploads,9);assert.equal(confirmations,1);assert.ok(q.rows.every(r=>r.state==='saved'));
+    assert.equal(await folder.text('clean.mp4'),'clean-original');assert.equal(await folder.text('uncertain.mp4'),'uncertain-original');assert.equal(await folder.text('sub/repair.mp4'),'test-video');
+    assert.equal(await folder.text(q.rows[1].backupPath),'flawed-original');assert.equal(q.rows[1].savedName,'sub/repair.mp4');
+    assert.match(q.rows[0].fileAction,/unchanged/);assert.match(q.rows[2].fileAction,/original kept/);
+    assert.equal(b.$('batch-existing-picker').hidden,true);assert.equal(b.$('batch-destination').disabled,true);assert.match(b.$('batch-metrics').textContent,/1 replaced/);
+    b.$('batch-report').onclick();assert.match(await env.downloads.at(-1).text(),/file_action/);assert.match(await env.downloads.at(-1).text(),/_bridge-backups/);
+    await b.$('batch-start').onclick();assert.equal(env.calls,3);assert.equal(confirmations,1);
+  }finally{b.close();}
+});
+
+test('repair batch declined confirmation and missing outputs submit no paid work',async()=>{
+  const folder=memoryFolder({'one.mp4':'original'}),env=environment(),b=await browser(env,{folder:folder.root});
+  try{
+    await setupRepair(b,'first_half,second_half,output,method,duration\na.mp4,b.mp4,one.mp4,kling-fal,3');
+    b.w.confirm=()=>false;await b.$('batch-start').onclick();assert.equal(env.calls,0);assert.equal(env.uploads,0);assert.equal((await b.state()).settings,undefined);assert.equal(folder.writes.length,0);
+    b.w.confirm=()=>true;await b.$('batch-reset').onclick();await b.load('first_half,second_half,output,method,duration\na.mp4,b.mp4,missing.mp4,kling-fal,3');
+    await b.$('batch-start').onclick();assert.equal(env.calls,0);assert.equal((await b.state()).rows[0].state,'invalid');assert.match((await b.state()).rows[0].error,/Missing existing output/);
+  }finally{b.close();}
+});
+
+test('in-place saving survives reload and lost server without another generation, and rejects a different folder',async()=>{
+  const folder=memoryFolder({'one.mp4':'original'}),env=environment();env.review={verdict:'pass',selectedAttempt:1,summary:'Repaired',redoCount:1,attempts:[]};
+  let b=await browser(env,{folder:folder.root});
+  try{
+    await setupRepair(b,'first_half,second_half,output,method,duration\na.mp4,b.mp4,one.mp4,kling-fal,3');
+    folder.options.failWrite=path=>path==='one.mp4';await b.$('batch-start').onclick();
+    let q=await b.state();assert.equal(q.rows[0].state,'saving');assert.equal(env.calls,1);assert.equal(await folder.text('one.mp4'),'original');assert.ok(q.rows[0].replacement.digest);
+    b.close();env.workspace=null;env.jobs.clear();folder.options.failWrite=null;
+    b=await browser(env,{folder:memoryFolder({'one.mp4':'original'}).root});await b.$('batch-output-folder').onclick();await b.$('batch-start').onclick();
+    assert.match(b.$('batch-status').textContent,/Wrong folder/);assert.equal(env.calls,1);
+    b.w.showDirectoryPicker=async()=>folder.root;await b.$('batch-output-folder').onclick();await b.$('batch-start').onclick();
+    q=await b.state();assert.equal(q.rows[0].state,'saved');assert.equal(await folder.text('one.mp4'),'test-video');assert.equal(env.calls,1);assert.equal(await folder.text(q.rows[0].backupPath),'original');
+  }finally{b.close();}
+});
+
+test('cancelling while staging a repair pauses saving and resume reuses the reviewed result',async()=>{
+  const folder=memoryFolder({'one.mp4':'original'}),env=environment();env.review={verdict:'pass',selectedAttempt:1,summary:'Repaired',redoCount:1,attempts:[]};
+  const b=await browser(env,{folder:folder.root});
+  try{
+    await setupRepair(b,'first_half,second_half,output,method,duration\na.mp4,b.mp4,one.mp4,kling-fal,3');
+    let cancelOnce=true;folder.options.beforeClose=async path=>{if(path.includes('/repairs/')&&cancelOnce){cancelOnce=false;b.$('batch-cancel').onclick();}};
+    await b.$('batch-start').onclick();assert.equal((await b.state()).rows[0].state,'saving');assert.equal(await folder.text('one.mp4'),'original');
+    await b.$('batch-start').onclick();assert.equal((await b.state()).rows[0].state,'saved');assert.equal(env.calls,1);assert.equal(await folder.text('one.mp4'),'test-video');
+  }finally{b.close();}
+});
 
 test('batch failures are visible as dismissible notifications and link back to their context without changing the queue',async()=>{
   const env=environment(),b=await browser(env);env.keys={fal:false,kie:false};

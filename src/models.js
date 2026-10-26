@@ -9,14 +9,14 @@ const METHODS = [
   {id:'dissolve', name:'Overlapping clip dissolve · local', provider:'local', min:0.1, max:3, defaultDuration:0.3, help:'Crossfades moving footage and audio. Overlaps the end of A and start of B, shortening the combined duration.'}
 ];
 const DEFAULT_PROMPT = [
-  'One continuous photorealistic shot from a fixed camera, matching the supplied first and last frames. Preserve the same dealer, face, clothing, table layout, lighting and background.',
-  'Move hands and forearms directly along the shortest natural path to the ending pose, then rest. No detours, extra tasks, dealing, collecting, shuffling or gestures. Do not reach for, touch or move either card holder, discard tray or shoe unless the endpoint explicitly requires contact. Never invent a card transfer to fill time.',
-  'Treat every card and chip as the same persistent physical object throughout. Cards resting on the table stay fixed unless their movement is required by the ending frame.',
-  "Preserve each card's size, thickness, rectangular shape, back design and visible rank/suit. Do not flip cards unless the ending frame requires it; required flips use continuous physical rotation.",
-  "A moved card follows one continuous physical path under the hand's control, with consistent grip, contact, perspective and shadow. When fingers cover a card, it remains behind them and reappears intact as the hand moves away.",
-  'Cards never vanish, fade, duplicate, merge or teleport. Maintain coherent fingers, wrists, grips and contact. Preserve body proportions and silhouette, sleeve shape, clothing seams and hair volume; natural cloth/hair motion only, no melting or morphing.',
-  'Match the final card positions and hand pose exactly without a last-frame snap. If an object is only visible at one boundary, account for it through continuous physically plausible movement or occlusion; never make it appear or disappear by fading.'
+  'One continuous fixed-camera shot matching both reference frames. This is a minimal pose transition, not a performance or a new casino action. Preserve the dealer, table, background, exposure, white balance and shadows.',
+  'Only move what must change to reach the ending pose. Hands and forearms take short, direct, physically plausible paths. Begin gently near the start and progress at an even natural pace across the interval, easing into the end. No long frozen hold followed by a rush, overshoot, detour or last-frame snap. Similar poses need only a tiny adjustment, never filler actions.',
+  'No invented dealing, mimed dealing, shuffling, collecting, presenting, wide arm spreads or sweeps into the player area. Do not approach or touch the shoe, holders or tray unless required by the endpoints. An empty hand stays empty unless a visible, endpoint-required pickup occurs.',
+  'Every card and chip persists as the same physical object. Stationary cards stay fixed. Preserve count, size, thickness, rectangular shape, back design and visible rank/suit. No appearance from nowhere, disappearance, duplication, merging, fading or teleporting. A required move or flip follows a continuous hand-controlled path with stable grip, contact, shadow and occlusion; covered cards reappear intact.',
+  'Keep fingers, wrists, arms and body coherent in EVERY consecutive frame: no position jumps, stretched limbs or intersections. Keep head and torso quiet unless endpoints require a change. No head toss, hair flick, new fringe, hair passing through itself, face melting or identity changes.',
+  'Preserve hair silhouette, sleeve contours, seams and sweater knit texture throughout, especially at both joins. Only small physically necessary cloth/hair motion; no texture redraw, smoothing, flicker or lighting pulse. Match the reference poses and visible object layout at both boundaries.'
 ].join(' ');
+const KLING_NEGATIVE_PROMPT='invented dealing, mimed dealing, cards appearing from nowhere, vanishing cards, extra gestures, wide arm spread, unnecessary table sweep, limb teleportation, one-frame position pop, head toss, hair flick, new fringe, hair self-intersection, face morphing, changing sweater texture, exposure flicker, frozen hold then rushed movement';
 
 function getMethod(id) { const m = METHODS.find(m=>m.id===id); if(!m) throw new Error('Unknown interpolation method'); return m; }
 const {parse:frameRate}=require('../public/frame-rate');
@@ -34,6 +34,6 @@ function falInput(m, a, b, o) {
   // converts it to the exact requested output rate; frame count uses that rate.
   if(m.kind==='interpolation') return {start_image_url:a,end_image_url:b,output_type:'video',num_frames:Math.max(1,Math.round(o.duration*frameRate(o.fps).value)-2),include_start:true,include_end:true,fps:Math.round(frameRate(o.fps).value)};
   if(m.id==='seedance') return {image_url:a,end_image_url:b,prompt:o.prompt,duration:String(o.duration),resolution:'720p',aspect_ratio:'auto',generate_audio:false,codec:'H264'};
-  return {start_image_url:a,end_image_url:b,prompt:o.prompt,duration:String(o.duration),generate_audio:false};
+  return {start_image_url:a,end_image_url:b,prompt:o.prompt,negative_prompt:KLING_NEGATIVE_PROMPT,duration:String(o.duration),generate_audio:false};
 }
 module.exports={METHODS,DEFAULT_PROMPT,getMethod,validateOptions,falInput,frameRate};

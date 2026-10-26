@@ -24,5 +24,6 @@ test('RIFE accepts subsecond durations and requests a video containing both endp
 test('generative adapters send both endpoints and model-specific fields',()=>{
   const kling=falInput(getMethod('kling-fal'),'a','b',{...base,duration:3});
   assert.equal(kling.start_image_url,'a');assert.equal(kling.end_image_url,'b');assert.equal(kling.duration,'3');assert.equal(kling.generate_audio,false);
+  assert.match(kling.negative_prompt,/limb teleportation/);assert.match(kling.negative_prompt,/hair flick/);
   const seed=falInput(getMethod('seedance'),'a','b',{...base,duration:4});assert.equal(seed.image_url,'a');assert.equal(seed.end_image_url,'b');assert.equal(seed.aspect_ratio,'auto');
 });
