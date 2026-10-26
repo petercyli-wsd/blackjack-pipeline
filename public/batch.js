@@ -46,6 +46,16 @@
     const last=review.attempts?.at(-1);
     return last?.generationError||(last?.assessment?.error&&last.assessment.summary)||review.summary||'Review service or redo failed.';
   }
+  function reviewDescription(review){
+    const assessment=review.attempts?.find(a=>a.attempt===(review.selectedAttempt??0))?.assessment;
+    if(assessment?.error)return `Review error (not a visual verdict): ${review.summary}`;
+    // Older checkpoints predate the explanation in the server summary. Show
+    // their confidence gate as well, without altering any stored verdict.
+    const low=review.verdict!=='pass'&&Number.isFinite(assessment?.confidence)&&assessment.confidence<.85;
+    const reason=low?`Confidence ${Math.floor(assessment.confidence*10000)/100}% is below the 85% threshold; manual review required.`:'';
+    const summary=reason&&!review.summary?.startsWith(reason)?`${reason} ${review.summary}`:review.summary;
+    return `${review.verdict==='pass'?'Approved':'Needs review'}: ${summary}`;
+  }
   const resolveRow=row=>BatchSettings.resolve(row,queue?.settings||ui.settings(),ui.methods());
   function previewSettings(row){try{return resolveRow(row);}catch{return null;}}
   function report(){return BatchFormat.csv([
@@ -120,13 +130,14 @@
     }else{$('batch-estimate').textContent='Choose a valid method and duration to see estimates.';$('batch-estimate-basis').textContent='';}
     $('batch-metrics').textContent=`${complete} / ${queue.rows.length} outputs saved or buffered | ${counts.pending||0} pending | ${(counts.invalid||0)+(counts.failed||0)+(counts.cancelled||0)+(counts.skipped||0)} skipped/failed | ${counts.discarded||0} discarded | ${counts.uncertain||0} need review\n${buffered.length} files / ${(buffered.reduce((sum,x)=>sum+x.blob.size,0)/1048576).toFixed(1)} MB buffered for ZIP part ${queue.part}`;
     if(replacing())$('batch-metrics').textContent=`${complete} / ${queue.rows.length} outputs reviewed | ${counts.pending||0} pending | ${(counts.failed||0)+(counts.invalid||0)} failed/invalid | ${queue.rows.filter(r=>r.fileAction?.startsWith('replaced')).length} replaced | ${queue.rows.filter(r=>r.fileAction?.startsWith('original kept')).length} originals kept for manual review`;
-    const reviewed=queue.rows.filter(r=>r.result?.review);if(reviewed.length)$('batch-metrics').textContent+=`\nAI review: ${reviewed.filter(r=>r.result.review.verdict==='pass').length} approved | ${reviewed.filter(r=>r.result.review.verdict!=='pass').length} need human review | ${reviewed.reduce((n,r)=>n+r.result.review.redoCount,0)} redos`;
+    const reviewed=queue.rows.filter(r=>r.result?.review),reviewErrors=reviewed.filter(r=>r.result.review.attempts?.some(a=>a.assessment?.error||a.generationError));
+    if(reviewed.length)$('batch-metrics').textContent+=`\nAI review: ${reviewed.filter(r=>r.result.review.verdict==='pass').length} approved | ${reviewed.filter(r=>r.result.review.verdict!=='pass'&&!reviewErrors.includes(r)).length} need human review | ${reviewErrors.length} review/redo errors | ${reviewed.reduce((n,r)=>n+r.result.review.redoCount,0)} redos`;
     $('batch-progress').max=queue.rows.length;$('batch-progress').value=queue.rows.filter(r=>terminal.includes(r.state)).length;
     page=Math.max(0,Math.min(page,Math.ceil(queue.rows.length/50)-1));const start=page*50;
     $('batch-rows').replaceChildren();
     for(const row of queue.rows.slice(start,start+50)){
       const s=previewSettings(row);
-      const tr=document.createElement('tr');for(const text of [row.number,row.savedName||row.name||row.output,s?`${s.method} · ${s.duration}s (${s.settingSource})`:'Invalid settings',`${row.fileAction||row.state}${row.result?.review?' · '+row.result.review.verdict+': '+row.result.review.summary:''}${row.error?' — '+row.error:''}${row.providerJob?.requestId?' · Request '+row.providerJob.requestId:''}`]){const td=document.createElement('td');td.textContent=text;tr.append(td);}$('batch-rows').append(tr);
+      const tr=document.createElement('tr');for(const text of [row.number,row.savedName||row.name||row.output,s?`${s.method} · ${s.duration}s (${s.settingSource})`:'Invalid settings',`${row.fileAction||row.state}${row.result?.review?' · '+reviewDescription(row.result.review):''}${row.error?' — '+row.error:''}${row.providerJob?.requestId?' · Request '+row.providerJob.requestId:''}`]){const td=document.createElement('td');td.textContent=text;tr.append(td);}$('batch-rows').append(tr);
     }
     $('batch-page').textContent=`${start+1}–${Math.min(start+50,queue.rows.length)} of ${queue.rows.length}`;
     $('batch-prev').disabled=page===0;$('batch-next').disabled=start+50>=queue.rows.length;

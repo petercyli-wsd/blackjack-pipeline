@@ -1,0 +1,5 @@
+{
+  "verdict": "pass",
+  "confidence": 0.8,
+  "summary": "Endpoints A and B differ only by a slight inward shift of both resting hands, with the head and torso essentially unchanged. In the bridge frames (images 7–15, 0.334–1.001s), the hands drift gradually from the A spacing to the B spacing. There is no invented dealing, card handling, shoe or holder interaction, or hand detour. The card holder, shoe, chip markers, clamps and background stay fixed throughout. Face, hair outline and the knit/furry sweater texture remain consistent at both joins: images 6→7 and 15→16 show no visible texture replacement, exposure jump or pose pop. The left-hand lift in images 17–18 (1.168–1.293s) falls after the bridge end at 1.001s, so it is attributed to the incoming source footage rather than the generated bridge. No anatomical or object defects are visible in the samples."
+}

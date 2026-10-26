@@ -7,6 +7,21 @@ const {reviewOptions,parseReview,repairPrompt,sampleIndices,corroborate,runValid
 const {DEFAULT_PROMPT}=require('../src/models');
 const pass={verdict:'pass',confidence:.95,summary:'Continuous minimal movement.',issues:[]};
 const fail={confirmed:true,verdict:'fail',confidence:.95,summary:'Invented card transfer.',issues:[{category:'cards_objects',severity:'major',time:.5,evidence:'A packet appears under the hand and moves to the shoe.'}]};
+// Recorded final answer from the failed production request; no keys or image URLs.
+const omittedIssues=JSON.stringify(require('./fixtures/opus-pass-without-issues.json'));
+
+test('recorded Opus pass with omitted empty issues parses without weakening confidence or defect gates',()=>{
+  const result=parseReview(omittedIssues);
+  assert.equal(result.verdict,'uncertain');assert.equal(result.confidence,.8);assert.deepEqual(result.issues,[]);
+  assert.match(result.summary,/Confidence 80% is below the 85% threshold/);assert.equal(result.normalizations.length,1);
+  assert.equal(parseReview(JSON.stringify(result)).summary,result.summary);
+  assert.match(parseReview(JSON.stringify({...pass,confidence:.849})).summary,/Confidence 84.9% is below/);
+  assert.equal(parseReview(JSON.stringify({...JSON.parse(omittedIssues),confidence:.95})).verdict,'pass');
+  for(const verdict of ['fail','uncertain'])assert.throws(()=>parseReview(JSON.stringify({verdict,confidence:.95,summary:'No issue list supplied.'})),/issues must be an array/);
+  for(const issues of [null,{},'none',[{}]])assert.throws(()=>parseReview(JSON.stringify({...pass,issues})),/invalid/);
+  for(const confidence of [undefined,null,'0.8',80,-.1])assert.throws(()=>parseReview(JSON.stringify({...pass,confidence})),/confidence must be a number/);
+  for(const verdict of [undefined,null,'PASS','good'])assert.throws(()=>parseReview(JSON.stringify({...pass,verdict})),/verdict must be/);
+});
 
 test('samples include adjacent join frames, remain bounded and require independently matching failure evidence',()=>{
   const r={fps:24,duration:30,joinStart:5,bridgeDuration:20};const indices=sampleIndices(r);
@@ -47,6 +62,7 @@ test('review loop bounds paid redos, preserves the original on uncertainty/error
   r=await exercise([fail],{method:'film'});assert.equal(r.renders.length,1);
   r=await exercise([fail],{mode:'review'});assert.equal(r.renders.length,1);
   r=await exercise([new Error('bad review-secret')]);assert.equal(r.renders.length,1);assert.equal(r.result.review.pauseBatch,true);assert.ok(!JSON.stringify(r.result).includes('review-secret'));assert.ok((await fs.stat(r.result.output)).size>0);
+  r=await exercise([parseReview(omittedIssues)]);assert.equal(r.renders.length,1);assert.equal(r.result.review.pauseBatch,false);assert.equal(r.result.review.verdict,'needs_review');assert.match(r.result.review.summary,/Confidence 80%/);assert.equal(r.result.review.attempts[0].assessment.normalizations.length,1);
   r=await exercise([fail],{renderError:true});assert.equal(r.renders.length,2);assert.equal(r.result.review.pauseBatch,true);assert.equal(r.result.review.verdict,'needs_review');assert.ok((await fs.stat(r.result.output)).size>0);
   r=await exercise([pass],{mode:'off'});assert.equal(r.assessments.length,0);assert.equal(r.result.review,undefined);
 });
@@ -86,6 +102,11 @@ test('real imported output yields exact timestamped samples; fal adapter submits
   const unavailable=await runValidated({...o,method:'kling-fal',review:{mode:'redo',maxRetries:1}},{dir:path.join(root,'existing-error'),candidate:made.output,reviewKey:'review-key',signal,renderVideo:async()=>{generates++;throw new Error('Must not generate');},reviewVideo:async()=>{throw Object.assign(new Error('Reasoning is mandatory for this endpoint and cannot be disabled.'),{status:400});}});
   assert.equal(generates,0);assert.equal(unavailable.output,made.output);assert.equal(unavailable.review.pauseBatch,true);assert.equal(unavailable.review.selectedAttempt,0);assert.equal(unavailable.review.redoCount,0);
   assert.equal(unavailable.review.attempts.length,1);assert.equal(unavailable.review.attempts[0].source,'existing');assert.equal(unavailable.review.attempts[0].assessment.error,true);assert.match(unavailable.review.summary,/Reasoning is mandatory/);
+  const replay=await runValidated(o,{dir:path.join(root,'existing-recorded-response'),candidate:made.output,reviewKey:'review-key',signal,renderVideo:async()=>{generates++;throw new Error('Must not generate');},reviewVideo:(result,options,context)=>reviewCandidate(result,options,{...context,falClientFactory:()=>({storage:{upload:async()=> 'https://example.com/frame.jpg'},queue:{submit:async()=>({request_id:'recorded-response'}),status:async()=>({status:'COMPLETED'}),result:async()=>({data:{output:omittedIssues}})}})})});
+  assert.equal(replay.review.pauseBatch,false);assert.equal(replay.review.verdict,'needs_review');assert.equal(replay.review.redoCount,0);assert.equal(generates,0);assert.equal(replay.output,made.output);assert.equal(replay.review.attempts[0].assessment.error,undefined);
+  const malformed=await runValidated(o,{dir:path.join(root,'existing-malformed-response'),candidate:made.output,reviewKey:'review-key',signal,renderVideo:async()=>{generates++;throw new Error('Must not generate');},reviewVideo:(result,options,context)=>reviewCandidate(result,options,{...context,falClientFactory:()=>({storage:{upload:async()=> 'https://example.com/frame.jpg'},queue:{submit:async()=>({request_id:'invalid-response'}),status:async()=>({status:'COMPLETED'}),result:async()=>({data:{output:JSON.stringify({verdict:'fail',confidence:'90%',summary:'review-key'})}})}})})});
+  assert.equal(malformed.review.pauseBatch,true);assert.match(malformed.review.summary,/confidence must be a number/);assert.equal(generates,0);
+  assert.equal(malformed.review.attempts[0].assessment.diagnostics.requestId,'invalid-response');assert.match(malformed.review.attempts[0].assessment.diagnostics.output,/\[redacted\]/);assert.ok(!JSON.stringify(malformed).includes('review-key'));
   await assert.rejects(()=>importedResult(a,o,{dir:path.join(root,'wrong'),signal}),/A \+ bridge \+ B/);
 });
 
