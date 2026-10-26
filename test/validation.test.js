@@ -64,21 +64,28 @@ test('real imported output yields exact timestamped samples; fal adapter submits
   let submitted,record,uploads=0;
   const result=await reviewCandidate(imported,o,{dir:path.join(root,'fal'),key:'session-fal',signal,onProviderJob:j=>record=j,falClientFactory:({credentials})=>{
     assert.equal(credentials,'session-fal');return {storage:{upload:async blob=>{uploads++;assert.match(blob.type,/image\/(png|jpeg)/);assert.ok(blob.size>100);return 'https://example.com/evidence.mp4';}},queue:{
-      submit:async(endpoint,payload)=>{assert.equal(endpoint,ENDPOINT);submitted=payload;return {request_id:'review-123'};},status:async()=>({status:'COMPLETED'}),result:async()=>({data:{output:JSON.stringify(pass)}})
+      submit:async(endpoint,payload)=>{
+        assert.equal(endpoint,ENDPOINT);submitted=payload;
+        if(payload.input.reasoning!==true)throw Object.assign(new Error('Reasoning is mandatory for this endpoint and cannot be disabled.'),{status:400});
+        return {request_id:'review-123'};
+      },status:async()=>({status:'COMPLETED'}),result:async()=>({data:{output:JSON.stringify(pass),reasoning:'Separate reasoning is not the final JSON verdict.'}})
     }};
   }});
   assert.equal(result.verdict,'pass');assert.equal(uploads,evidence.frames.length+2);assert.equal(record.phase,'review');assert.equal(submitted.input.model,'anthropic/claude-opus-5.5');assert.equal(record.model,submitted.input.model);assert.equal(result.model,submitted.input.model);
-  assert.ok(!Object.hasOwn(submitted.input,'temperature'));assert.ok(!Object.hasOwn(submitted.input,'thinking'));assert.equal(submitted.input.max_tokens,8192);assert.equal(submitted.input.reasoning,false);assert.equal(submitted.input.enable_web_search,false);assert.match(submitted.input.prompt,/sampled stills/);assert.match(submitted.input.prompt,/Empty player seats/);
+  assert.ok(!Object.hasOwn(submitted.input,'temperature'));assert.ok(!Object.hasOwn(submitted.input,'thinking'));assert.equal(submitted.input.max_tokens,8192);assert.equal(submitted.input.reasoning,true);assert.equal(submitted.input.enable_web_search,false);assert.match(submitted.input.prompt,/sampled stills/);assert.match(submitted.input.prompt,/Empty player seats/);
   for(const agree of [true,false]){
     let calls=0;const issue={...fail,issues:[{...fail.issues[0],time:Number(evidence.frames[3].time.toFixed(3))}]};
     const verified=await reviewCandidate(imported,{...o,method:'kling-fal',review:{mode:'redo',maxRetries:1}},{dir:path.join(root,`verify-${agree}`),key:'session-fal',signal,falClientFactory:()=>({storage:{upload:async()=> 'https://example.com/frame.jpg'},queue:{
-      submit:async(endpoint,payload)=>{assert.equal(payload.input.model,'anthropic/claude-opus-5.5');assert.ok(!Object.hasOwn(payload.input,'temperature'));return {request_id:`verification-${++calls}`};},status:async()=>({status:'COMPLETED'}),result:async()=>({data:{output:JSON.stringify(calls===1||agree?issue:pass),usage:{cost:.02}}})
+      submit:async(endpoint,payload)=>{assert.equal(payload.input.model,'anthropic/claude-opus-5.5');assert.equal(payload.input.reasoning,true);assert.ok(!Object.hasOwn(payload.input,'temperature'));return {request_id:`verification-${++calls}`};},status:async()=>({status:'COMPLETED'}),result:async()=>({data:{output:JSON.stringify(calls===1||agree?issue:pass),usage:{cost:.02}}})
     }})});
     assert.equal(calls,2);assert.equal(verified.verdict,agree?'fail':'uncertain');assert.equal(verified.confirmed,agree);assert.equal(verified.reportedCostUSD,.04);assert.equal(verified.checks.length,2);
   }
   let generates=0;
   const reviewed=await runValidated(o,{dir:path.join(root,'existing-only'),candidate:made.output,reviewKey:'review-key',signal,renderVideo:async()=>{generates++;throw new Error('Must not generate');},reviewVideo:async()=>pass});
   assert.equal(generates,0);assert.equal(reviewed.review.verdict,'pass');assert.equal(reviewed.output,made.output);
+  const unavailable=await runValidated({...o,method:'kling-fal',review:{mode:'redo',maxRetries:1}},{dir:path.join(root,'existing-error'),candidate:made.output,reviewKey:'review-key',signal,renderVideo:async()=>{generates++;throw new Error('Must not generate');},reviewVideo:async()=>{throw Object.assign(new Error('Reasoning is mandatory for this endpoint and cannot be disabled.'),{status:400});}});
+  assert.equal(generates,0);assert.equal(unavailable.output,made.output);assert.equal(unavailable.review.pauseBatch,true);assert.equal(unavailable.review.selectedAttempt,0);assert.equal(unavailable.review.redoCount,0);
+  assert.equal(unavailable.review.attempts.length,1);assert.equal(unavailable.review.attempts[0].source,'existing');assert.equal(unavailable.review.attempts[0].assessment.error,true);assert.match(unavailable.review.summary,/Reasoning is mandatory/);
   await assert.rejects(()=>importedResult(a,o,{dir:path.join(root,'wrong'),signal}),/A \+ bridge \+ B/);
 });
 

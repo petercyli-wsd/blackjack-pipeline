@@ -65,6 +65,58 @@ async function setupRepair(b,csv){
   await b.$('batch-output-folder').onclick();await b.load(csv);
 }
 
+function failedInitialReview(){
+  const summary='Review could not complete: Quality review (HTTP 400): Reasoning is mandatory for this endpoint and cannot be disabled.';
+  return {verdict:'needs_review',summary,pauseBatch:true,selectedAttempt:0,redoCount:0,attempts:[{attempt:0,source:'existing',assessment:{verdict:'uncertain',confidence:0,summary,issues:[],error:true}}]};
+}
+
+test('failed initial reviews recover after refresh without clearing the CSV or repeating completed reviews',async()=>{
+  const folder=memoryFolder({'clean.mp4':'clean-original','retry.mp4':'retry-original','pending.mp4':'pending-original'}),env=environment();
+  env.review=n=>n===2?failedInitialReview():{verdict:'pass',summary:'Passed',selectedAttempt:0,redoCount:0,attempts:[]};
+  let b=await browser(env,{folder:folder.root});
+  try{
+    await setupRepair(b,'first_half,second_half,output,method,duration\na.mp4,b.mp4,clean.mp4,film,0.33\na.mp4,b.mp4,retry.mp4,film,0.33\na.mp4,b.mp4,pending.mp4,film,0.33');
+    assert.equal(b.$('batch-review-recovery').hidden,true);
+    await b.$('batch-start').onclick();const before=await b.state(),writes=folder.writes.length;
+    assert.equal(env.calls,2);assert.deepEqual(before.rows.map(r=>r.state),['saved','saved','pending']);
+    assert.match(b.$('batch-status').textContent,/HTTP 400.*Reasoning is mandatory/);assert.match(b.$('notifications').textContent,/Retry failed reviews/);
+    assert.equal(b.$('batch-review-recovery').hidden,false);assert.match(b.$('batch-review-recovery-help').textContent,/1 original video has not been reviewed/);
+    b.close();b=await browser(env,{folder:folder.root});assert.equal(b.$('batch-review-recovery').hidden,false);
+    b.w.confirm=()=>false;await b.$('batch-retry-reviews').onclick();assert.deepEqual(await b.state(),before);assert.equal(env.calls,2);
+    b.w.confirm=text=>{assert.match(text,/1 failed review/);assert.match(text,/incur a charge/);return true;};
+    await b.$('batch-retry-reviews').onclick();let q=await b.state();
+    assert.equal(q.id,before.id);assert.equal(q.csvName,before.csvName);assert.deepEqual(q.rows[0],before.rows[0]);assert.deepEqual(q.rows.map(r=>r.state),['saved','pending','pending']);
+    assert.equal(q.rows[1].result,undefined);assert.equal(q.rows[1].history[0].review.summary,before.rows[1].result.review.summary);
+    assert.deepEqual(q.rows[1].history[0].providerJobs,before.rows[1].providerJobs);assert.equal(q.rows[1].originalDigest,before.rows[1].originalDigest);
+    assert.equal(env.calls,2);assert.equal(folder.writes.length,writes);assert.equal(b.$('batch-review-recovery').hidden,true);
+    // The reset is persisted even if another refresh happens before resuming.
+    b.close();b=await browser(env,{folder:folder.root});b.selectFiles();await b.$('batch-output-folder').onclick();await b.$('batch-start').onclick();q=await b.state();
+    assert.equal(env.calls,4);assert.ok(q.rows.every(r=>r.state==='saved'&&r.result.review.verdict==='pass'));assert.equal(q.id,before.id);
+    assert.equal(await folder.text('clean.mp4'),'clean-original');assert.equal(await folder.text('retry.mp4'),'retry-original');assert.equal(await folder.text('pending.mp4'),'pending-original');
+    b.$('batch-report').onclick();assert.match(await env.downloads.at(-1).text(),/Reasoning is mandatory/);assert.match(await env.downloads.at(-1).text(),/review-request/);
+  }finally{b.close();}
+});
+
+test('review recovery excludes visual verdicts and attempted redos, and rolls back failed checkpoints',async()=>{
+  const folder=memoryFolder({'one.mp4':'original'}),env=environment(),b=await browser(env,{folder:folder.root}),put=IDBObjectStore.prototype.put;
+  try{
+    for(const review of [
+      {...failedInitialReview(),pauseBatch:false,attempts:[{attempt:0,source:'existing',assessment:{verdict:'uncertain',error:false}}]},
+      {...failedInitialReview(),redoCount:1,attempts:[...failedInitialReview().attempts,{attempt:1,generationError:'Redo failed'}]}
+    ]){
+      env.review=review;await setupRepair(b,'a.mp4,b.mp4,one.mp4');await b.$('batch-start').onclick();
+      assert.equal(b.$('batch-review-recovery').hidden,true);assert.equal(b.$('batch-retry-reviews').disabled,true);
+      const before=await b.state(),calls=env.calls;await b.$('batch-retry-reviews').onclick();assert.deepEqual(await b.state(),before);assert.equal(env.calls,calls);
+      await b.$('batch-reset').onclick();
+    }
+    env.review=failedInitialReview();await setupRepair(b,'a.mp4,b.mp4,one.mp4');await b.$('batch-start').onclick();const before=await b.state(),calls=env.calls;
+    env.locked=true;await b.$('batch-retry-reviews').onclick();assert.match(b.$('batch-status').textContent,/another tab/);assert.deepEqual(await b.state(),before);env.locked=false;
+    IDBObjectStore.prototype.put=function(value,...args){if(this.name==='rows'&&value.state==='pending')throw new Error('Storage unavailable');return put.call(this,value,...args);};
+    await b.$('batch-retry-reviews').onclick();assert.deepEqual(await b.state(),before);assert.equal(b.$('batch-review-recovery').hidden,false);assert.equal(b.$('batch-retry-reviews').disabled,false);assert.match(b.$('batch-status').textContent,/Storage unavailable/);assert.equal(env.calls,calls);
+    IDBObjectStore.prototype.put=put;await b.$('batch-retry-reviews').onclick();assert.equal((await b.state()).rows[0].state,'pending');assert.equal(env.calls,calls);assert.equal(await folder.text('one.mp4'),'original');
+  }finally{IDBObjectStore.prototype.put=put;b.close();}
+});
+
 test('in-place batch reviews every row and replaces only passed redos, preserving names, originals and reports',async()=>{
   const folder=memoryFolder({'clean.mp4':'clean-original','sub/repair.mp4':'flawed-original','uncertain.mp4':'uncertain-original'}),env=environment(),b=await browser(env,{folder:folder.root});
   env.review=n=>({verdict:n===3?'needs_review':'pass',selectedAttempt:n===2?1:0,summary:'Assessment',redoCount:n===2?1:0,attempts:[]});

@@ -8,7 +8,7 @@
   let queue=null,files=new Map(),foldedFiles=new Map(),destination=null,running=false,stopAfter=false,cancelled=false,uploadController=null,page=0,downloaded=false;
   let buffered=[],db,available=false,editing=false,existingFiles=new Map();
   const message=(text,error=false,notice)=>{$('batch-status').textContent=text;$('batch-status').classList.toggle('error',error);if(error||notice)window.StudioNotice.show({id:'batch',message:text,kind:error?'error':'warning',target:'batch-status'});else window.StudioNotice.dismiss('batch');};
-  const ids=['batch-workflow','batch-existing-folder','batch-csv','batch-folder','batch-input-root','batch-output-root','batch-destination','batch-output-folder','batch-path-label','batch-validate','batch-start','batch-reset','batch-retry','batch-skip','batch-download','batch-ack','batch-discard','batch-unit-cost','batch-cost-unit','mode-single','mode-batch'];
+  const ids=['batch-workflow','batch-existing-folder','batch-csv','batch-folder','batch-input-root','batch-output-root','batch-destination','batch-output-folder','batch-path-label','batch-validate','batch-start','batch-reset','batch-retry','batch-retry-reviews','batch-skip','batch-download','batch-ack','batch-discard','batch-unit-cost','batch-cost-unit','mode-single','mode-batch'];
   function lock(value){running=value;ui.lock(value);for(const id of ids)$(id).disabled=value;$('batch-pause').disabled=!value;$('batch-cancel').disabled=!value;render();}
   const storage=new Promise((resolve,reject)=>{
     const request=indexedDB.open('dealer-transition-batches',1);
@@ -33,6 +33,19 @@
   }
   function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),300000);}
   const replacing=()=>$('batch-destination').value==='replace';
+  function retryableReview(row){
+    const review=row.result?.review,attempt=review?.attempts?.[0];
+    // Only recheck untouched originals after an initial review error. A visual
+    // verdict or any attempted repair needs separate inspection, not this retry.
+    return queue?.workflow==='existing'&&queue.destination==='replace'&&row.state==='saved'&&
+      !row.replacement&&!row.backupPath&&review?.verdict==='needs_review'&&review.pauseBatch===true&&
+      review.selectedAttempt===0&&review.redoCount===0&&review.attempts?.length===1&&
+      attempt.attempt===0&&attempt.source==='existing'&&attempt.assessment?.error===true;
+  }
+  function reviewFailure(review){
+    const last=review.attempts?.at(-1);
+    return last?.generationError||(last?.assessment?.error&&last.assessment.summary)||review.summary||'Review service or redo failed.';
+  }
   const resolveRow=row=>BatchSettings.resolve(row,queue?.settings||ui.settings(),ui.methods());
   function previewSettings(row){try{return resolveRow(row);}catch{return null;}}
   function report(){return BatchFormat.csv([
@@ -78,6 +91,10 @@
     $('batch-output-folder').hidden=$('batch-destination').value==='zip';
     renderDestination();
     $('batch-retry').disabled=running||editing||!queue?.rows.some(r=>retryStates.includes(r.state));
+    const failedReviews=queue?.rows.filter(retryableReview).length||0;
+    $('batch-review-recovery').hidden=!failedReviews;
+    $('batch-retry-reviews').disabled=running||editing||!failedReviews;
+    $('batch-review-recovery-help').textContent=failedReviews?`${failedReviews} original video${failedReviews===1?' has':'s have'} not been reviewed because the review service failed. Fix the reported error, then choose Retry failed reviews and Start / resume batch. This keeps your CSV and completed reviews. Originals stay unchanged unless a later repair passes review.`:'';
     $('batch-skip').disabled=running||editing||!queue?.rows.some(r=>['uncertain',...pauseStates].includes(r.state));
     for(const id of ['batch-report','batch-reset'])$(id).disabled=running||editing||!queue;
     const settings=queue?.settings||ui.settings(),methods=ui.methods();
@@ -224,7 +241,7 @@
       row.savedName=row.name;row.state='saved';row.error='';row.elapsed=(Date.now()-row.started)/1000;
       try{await checkpoint({row});}catch(e){row.state='saving';throw e;}
       await release(row);render();
-      if(review.pauseBatch)throw new Error('Original kept. Review service or redo failed; check the row report before resuming.');
+      if(review.pauseBatch)throw new Error(`Original kept. ${reviewFailure(review)} ${retryableReview(row)?'After fixing this error, choose Retry failed reviews, then Start / resume batch.':'Check the row report and provider requests before resuming.'}`);
       return;
     }
     row.savedName=row.result.review?`${row.result.review.verdict==='pass'?'approved':'needs-review'}/${row.name}`:row.name;
@@ -244,7 +261,7 @@
       buffered.push(item);downloaded=false;
     }
     await release(row);render();
-    if(row.result.review?.pauseBatch)throw new Error('Result saved under needs-review. Review service or redo failed; check the row report and provider requests before resuming. No automatic resubmission was made.');
+    if(row.result.review?.pauseBatch)throw new Error(`Result saved under needs-review. ${reviewFailure(row.result.review)} Check the row report and provider requests before resuming. No automatic resubmission was made.`);
   }
   async function processRow(row){
     if(row.state==='pending'){
@@ -377,6 +394,24 @@
     try{await clearBuffered('saved');message('ZIP part cleared. Resume to process remaining rows.');}catch(e){message(e.message,true);}finally{render();}
   };
   $('batch-report').onclick=()=>download(new Blob([report()],{type:'text/csv'}),'batch-report.csv');
+  $('batch-retry-reviews').onclick=async()=>{
+    const rows=queue?.rows.filter(retryableReview)||[];
+    if(!rows.length||!confirm(`Queue ${rows.length} failed review${rows.length===1?'':'s'} again? Check the provider request IDs if billing is uncertain: another review can incur a charge. This keeps your CSV and completed reviews. On resume, only confirmed visual flaws can trigger a redo under your existing settings.`))return;
+    const previous=queue;
+    try{
+      const current=await api('/api/batch');
+      const completed=rows.find(row=>row.attempt===current.rowId);
+      if(completed)await release(completed);
+      const changed=new Map(rows.map(row=>{
+        const next={...row,state:'pending',error:'',history:[...(row.history||[]),{state:row.state,error:row.error,providerJob:row.providerJob,providerJobs:row.providerJobs,jobId:row.jobId,review:row.result.review,fileAction:row.fileAction,at:new Date().toISOString()}]};
+        for(const key of ['result','providerJob','providerJobs','jobId','savedName','fileAction','elapsed','started','attempt'])delete next[key];
+        return [row.id,next];
+      }));
+      queue={...queue,rows:queue.rows.map(row=>changed.get(row.id)||row)};
+      await checkpoint({rows:[...changed.values()]});
+      message(`${rows.length} failed review${rows.length===1?'':'s'} queued again. Reselect folders if needed, then choose Start / resume batch. Completed reviews and original videos are kept.`);
+    }catch(e){queue=previous;throw e;}
+  };
   async function resolveRows(retry){
     if(!queue||running)return;
     if(!confirm(retry?'Retry failed, cancelled and uncertain rows? Check provider request IDs first: retries can incur another charge. Completed outputs are kept.':'Skip all uncertain/in-progress rows? Submitted cloud work may still be billed. Saved outputs are kept.'))return;
@@ -416,7 +451,7 @@
       });
     }catch(e){message(`Paused: ${e.message}`,true);}finally{editing=false;render();}
   };}
-  for(const id of ['batch-start','batch-validate','batch-download','batch-ack','batch-retry','batch-skip','batch-reset','batch-discard'])$(id).onclick=exclusive($(id).onclick);
+  for(const id of ['batch-start','batch-validate','batch-download','batch-ack','batch-retry','batch-retry-reviews','batch-skip','batch-reset','batch-discard'])$(id).onclick=exclusive($(id).onclick);
   const discardForTask=exclusive(()=>clearBatch(true));
   $('batch-change-task').onclick=()=>running?$('batch-pause').onclick():discardForTask();
   $('batch-csv').onchange=exclusive($('batch-csv').onchange);

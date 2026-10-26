@@ -109,6 +109,7 @@
       <div class="batch-metrics" id="batch-metrics" aria-live="polite">No CSV loaded.</div>
       <progress id="batch-progress" value="0" max="1" aria-label="Batch progress"></progress>
       <div class="actions"><button id="batch-start" class="primary">Start / resume batch</button><button id="batch-pause" disabled>Pause after this row</button></div>
+      <div id="batch-review-recovery" hidden><p class="help" id="batch-review-recovery-help"></p><div class="actions"><button id="batch-retry-reviews" aria-describedby="batch-review-recovery-help">Retry failed reviews</button></div></div>
       <div class="actions" id="batch-zip-actions" hidden><button id="batch-download" disabled>Download ZIP part</button><button id="batch-ack" disabled>ZIP saved: clear part</button><button id="batch-discard" class="quiet">Discard buffered outputs</button></div>
       <details id="batch-more"><summary>More batch actions</summary><p class="help">Recovery and reports. To replace the loaded batch, use Clear CSV beside its filename above.</p><div class="actions"><button id="batch-report">Download row report</button><button id="batch-cancel" disabled>Cancel current row &amp; pause</button><button id="batch-retry" class="quiet">Retry failed / interrupted rows</button><button id="batch-skip" class="quiet">Skip interrupted rows</button></div></details>
       <p id="batch-status" role="status" aria-live="polite">Load a CSV to begin.</p>
