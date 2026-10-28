@@ -27,7 +27,7 @@
         if(queue){const {rows,...metadata}=queue;tx.objectStore('meta').put(metadata,'queue');}else tx.objectStore('meta').delete('queue');
         if(clear)tx.objectStore('rows').clear();
         for(const item of allRows?queue.rows:row?[row]:rows)tx.objectStore('rows').put(item);
-        if(clear)tx.objectStore('outputs').clear();for(const id of remove)tx.objectStore('outputs').delete(id);if(add)tx.objectStore('outputs').put(add);
+        if(clear)tx.objectStore('outputs').clear();for(const id of remove)tx.objectStore('outputs').delete(id);for(const item of [].concat(add||[]))tx.objectStore('outputs').put(item);
       }catch(e){tx.abort();reject(e);}
     });
   }
@@ -77,8 +77,8 @@
   const resolveRow=row=>BatchSettings.resolve(row,queue?.settings||ui.settings(),ui.methods());
   function previewSettings(row){try{return resolveRow(row);}catch{return null;}}
   function report(){return BatchFormat.csv([
-    ['first_half','second_half','output','row','status','error','method','duration','setting_source','method_source','duration_source','bridge_seconds','actual_bridge_seconds','bridge_frames','fps','encoded_fps','elapsed_seconds','provider','provider_request_id','zip_part','previous_attempts','saved_path','quality_verdict','quality_summary','redo_count','quality_details','all_provider_requests','file_action','original_backup'],
-    ...(queue?.rows||[]).map(r=>{const s=previewSettings(r);return [r.first,r.second,r.output,r.number,r.state,r.error,s?.method||r.csvMethod,s?.duration??r.csvDuration,s?.settingSource,s?.methodSource,s?.durationSource,s?.duration,r.result?.bridgeDuration,r.result?.bridgeFrames,(queue.settings||ui.settings()).fps,r.result?.fpsRational,r.elapsed?.toFixed(1),r.providerJob?.provider,r.providerJob?.requestId,r.part,r.history?JSON.stringify(r.history):'',r.savedName,r.result?.review?.verdict,r.result?.review?.summary,r.result?.review?.redoCount,r.result?.review?JSON.stringify(r.result.review):'',r.providerJobs?JSON.stringify(r.providerJobs):'',r.fileAction,r.backupPath].map(value=>typeof value==='string'&&/^[=+@\-\t\r]/.test(value)?"'"+value:value);})
+    ['first_half','second_half','output','row','status','error','method','duration','setting_source','method_source','duration_source','bridge_seconds','actual_bridge_seconds','bridge_frames','fps','encoded_fps','elapsed_seconds','provider','provider_request_id','zip_part','previous_attempts','saved_path','quality_verdict','quality_summary','redo_count','quality_details','all_provider_requests','file_action','original_backup','human_review','human_redos'],
+    ...(queue?.rows||[]).map(r=>{const s=previewSettings(r);return [r.first,r.second,r.output,r.number,r.state,r.error,s?.method||r.csvMethod,s?.duration??r.csvDuration,s?.settingSource,s?.methodSource,s?.durationSource,s?.duration,r.result?.bridgeDuration,r.result?.bridgeFrames,(queue.settings||ui.settings()).fps,r.result?.fpsRational,r.elapsed?.toFixed(1),r.providerJob?.provider,r.providerJob?.requestId,r.part,r.history?JSON.stringify(r.history):'',r.savedName,r.result?.review?.verdict,r.result?.review?.summary,r.result?.review?.redoCount,r.result?.review?JSON.stringify(r.result.review):'',r.providerJobs?JSON.stringify(r.providerJobs):'',r.fileAction,r.backupPath,r.humanReview?.verdict||r.humanDecision&&`${r.humanDecision} (not applied)`||'',r.humanRedos||''].map(value=>typeof value==='string'&&/^[=+@\-\t\r]/.test(value)?"'"+value:value);})
   ]);}
   function mode(batch){if(running)return;document.body.classList.toggle('batch-mode',batch);$('batch-panel').hidden=!batch;$('mode-batch').setAttribute('aria-pressed',String(batch));$('mode-single').setAttribute('aria-pressed',String(!batch));render();}
   $('mode-single').onclick=()=>mode(false);$('mode-batch').onclick=()=>mode(true);
@@ -94,6 +94,7 @@
     $('batch-destination-detail').textContent=!folder?'ZIPs keep the CSV output folders and filenames.':destination?(label?`Path label (provided by you): ${label}`:'On your computer. The browser does not share the full path.')+(replacing()?' Originals backed up under _bridge-backups/.':queue?.settings?.review?.mode&&queue.settings.review.mode!=='off'?' Results go into approved/ or needs-review/.':''):name?'Browser access needs to be granted again after a refresh. Choose the intended output folder before resuming.':'Each completed video will be saved here automatically.';
   }
   function render(){
+    window.BatchReview?.render();
     const isExisting=$('batch-workflow').value==='existing';
     $('batch-existing-wrap').hidden=!isExisting;
     $('batch-existing-picker').hidden=replacing();$('batch-existing-info').hidden=replacing();
@@ -159,7 +160,7 @@
     $('batch-rows').replaceChildren();
     for(const row of queue.rows.slice(start,start+50)){
       const s=previewSettings(row);
-      const tr=document.createElement('tr');for(const text of [row.number,row.savedName||row.name||row.output,s?`${s.method} · ${s.duration}s (${s.settingSource})`:'Invalid settings',`${row.fileAction||row.state}${row.result?.review?' · '+reviewDescription(row.result.review):''}${row.error?' — '+row.error:''}${row.providerJob?.requestId?' · Request '+row.providerJob.requestId:''}`]){const td=document.createElement('td');td.textContent=text;tr.append(td);}$('batch-rows').append(tr);
+      const tr=document.createElement('tr');for(const text of [row.number,row.savedName||row.name||row.output,s?`${s.method} · ${s.duration}s (${s.settingSource})`:'Invalid settings',`${row.fileAction||row.state}${row.humanReview?' · Approved by you':row.humanRedos?` · Redo ${row.humanRedos} requested by you`:''}${row.result?.review?' · '+reviewDescription(row.result.review):''}${row.error?' — '+row.error:''}${row.providerJob?.requestId?' · Request '+row.providerJob.requestId:''}`]){const td=document.createElement('td');td.textContent=text;tr.append(td);}$('batch-rows').append(tr);
     }
     $('batch-page').textContent=`${start+1}–${Math.min(start+50,queue.rows.length)} of ${queue.rows.length}`;
     $('batch-prev').disabled=page===0;$('batch-next').disabled=start+50>=queue.rows.length;
@@ -504,6 +505,14 @@
   };}
   for(const id of ['batch-start','batch-validate','batch-download','batch-ack','batch-retry','batch-retry-reviews','batch-enable-redos','batch-skip','batch-reset','batch-discard'])$(id).onclick=exclusive($(id).onclick);
   const discardForTask=exclusive(()=>clearBatch(true));
+  // For batch-review.js: human decisions on flagged outputs share this queue, its checkpoint and its lease.
+  window.studioBatch={
+    get queue(){return queue;},get buffered(){return buffered;},get destination(){return destination;},get running(){return running||editing;},
+    hasSources:()=>files.size>0,resolve:resolveRow,checkpoint,render,message,exclusive,requeue:requeueReviewedRow,
+    setBuffered(id,item){buffered=item?buffered.map(x=>x.id===id?item:x):buffered.filter(x=>x.id!==id);},
+    // Apply runs under the lease; start once it is released.
+    async startAfterLease(){while(editing)await wait(20);return $('batch-start').onclick();}
+  };
   $('batch-change-task').onclick=()=>running?$('batch-pause').onclick():discardForTask();
   $('batch-csv').onchange=exclusive($('batch-csv').onchange);
   window.addEventListener('beforeunload',event=>{if(running){event.preventDefault();event.returnValue='';}});

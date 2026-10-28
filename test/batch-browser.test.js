@@ -49,7 +49,7 @@ async function browser(env,{folder}={}){
   if(folder)w.showDirectoryPicker=async()=>folder;
   // Avoid 1.5-second polling waits; preserve asynchronous ordering.
   const timeout=w.setTimeout.bind(w);w.setTimeout=(fn,ms,...args)=>timeout(fn,ms===1500||ms===5000?1:ms,...args);
-  for(const name of ['notices.js','browser.js','frame-rate.js','renderer.js','batch-format.js','batch-settings.js','batch-zip.js','batch-estimates.js','batch-replace.js','batch.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
+  for(const name of ['notices.js','browser.js','frame-rate.js','renderer.js','batch-format.js','batch-settings.js','batch-zip.js','batch-estimates.js','batch-replace.js','batch.js','batch-review.js'])w.eval(fs.readFileSync(path.join(publicDir,name),'utf8'));
   await until(()=>$('method').options.length===METHODS.length&&!$('batch-csv').disabled).catch(e=>{throw new Error(`${e.message}: ${$('batch-status').textContent}; ${$('status').textContent}; methods=${$('method').options.length}`);});
   const selectFiles=()=>{
     Object.defineProperty($('batch-folder'),'files',{configurable:true,value:['a.mp4','b.mp4'].map(name=>({name,size:10,lastModified:1,webkitRelativePath:'videos/'+name}))});$('batch-folder').onchange();
@@ -541,5 +541,47 @@ test('legacy checkpoints without per-row settings resume using their original pa
     await b.$('batch-start').onclick();
     assert.deepEqual(env.submissions.map(s=>[s.method,s.duration]),[['rife',.6],['rife',.6]]);
     assert.ok((await b.state()).rows.every(r=>r.resolvedSettings.method==='rife'&&r.resolvedSettings.duration===.6));
+  }finally{b.close();}
+});
+
+test('human review: decide flagged clips in the grid and player, survive reload, then apply moves and redoes with another method',async()=>{
+  const env=environment(),folder=memoryFolder();
+  const flagged={decisionPolicy:DECISION_POLICY,verdict:'needs_review',summary:'Card edge flickers at the second join.',selectedAttempt:0,redoCount:0,pauseBatch:false,attempts:[{attempt:0,source:'generated',assessment:{verdict:'uncertain',confidence:.6,issues:[{category:'cards_objects',severity:'major',time:.9,evidence:'Card edge flickers.'}]}}]};
+  const approved={...flagged,verdict:'pass',summary:'Clean.',attempts:[]};
+  env.review=n=>n<=2?flagged:approved;
+  let b=await browser(env,{folder:folder.root});
+  try{
+    b.$('batch-destination').value='folder';b.$('batch-destination').onchange();await b.$('batch-output-folder').onclick();
+    await b.load('first_half,second_half,output,method,duration\na.mp4,b.mp4,one.mp4,film,0.33\na.mp4,b.mp4,two.mp4,film,0.67\na.mp4,b.mp4,three.mp4,film,0.33');
+    await b.$('batch-start').onclick();
+    assert.deepEqual([...folder.data.keys()].sort(),['approved/three.mp4','needs-review/one.mp4','needs-review/two.mp4'],b.$('batch-status').textContent);
+    assert.equal(b.$('human-review').hidden,false);assert.match(b.$('hr-count').textContent,/2 clips flagged/);
+    const cards=()=>[...b.$('hr-grid').querySelectorAll('.hr-card')];
+    assert.deepEqual(cards().map(c=>c.querySelector('code').textContent),['one.mp4','two.mp4']);
+    assert.match(cards()[0].querySelector('p').textContent,/Major · cards objects: Card edge flickers/);
+    // the grid: Fine on one; the player: Redo on two (keyboard), which empties the to-decide view
+    cards()[0].querySelector('[data-v=pass]').onclick();await until(async()=>(await b.state()).rows[0].humanDecision==='pass');
+    assert.deepEqual(cards().map(c=>c.querySelector('code').textContent),['two.mp4']);
+    cards()[0].querySelector('.hr-thumb').onclick();await until(()=>b.$('hr-name').textContent==='two.mp4');
+    assert.match(b.$('hr-issues').textContent,/0.90s Major/);
+    b.w.document.dispatchEvent(new b.w.KeyboardEvent('keydown',{key:'r'}));
+    await until(async()=>(await b.state()).rows[1].humanDecision==='redo');
+    assert.match(b.$('hr-tally').textContent,/0 to decide · 1 fine · 1 redo/);
+    assert.equal(b.$('hr-apply').textContent,'Apply 2 decisions & start redos');
+    assert.deepEqual([...folder.data.keys()].sort(),['approved/three.mp4','needs-review/one.mp4','needs-review/two.mp4'],'nothing moves before apply');
+    // decisions are checkpointed: reload, reselect folders, apply
+    b.close();b=await browser(env,{folder:folder.root});
+    assert.match(b.$('hr-tally').textContent,/1 fine · 1 redo/);
+    b.selectFiles();await b.$('batch-output-folder').onclick();
+    await b.$('hr-apply').onclick();
+    await until(async()=>(await b.state()).rows[1].state==='saved');
+    assert.deepEqual([...folder.data.keys()].sort(),['approved/one.mp4','approved/three.mp4','approved/two.mp4','rejected/two.mp4']);
+    assert.equal(env.calls,4);assert.equal(env.submissions.at(-1).method,'rife');assert.equal(env.submissions.at(-1).duration,0.67);
+    const q=await b.state();
+    assert.equal(q.rows[0].humanReview.verdict,'pass');assert.equal(q.rows[0].savedName,'approved/one.mp4');
+    assert.equal(q.rows[1].humanRedos,1);assert.equal(q.rows[1].history.at(-1).human.rejected,'rejected/two.mp4');assert.equal(q.rows[1].resolvedSettings.method,'rife');
+    assert.equal(b.$('human-review').hidden,false);assert.match(b.$('hr-tally').textContent,/1 already approved by you/);
+    b.$('batch-report').onclick();const report=await env.downloads.at(-1).text();
+    assert.match(report,/"human_review","human_redos"/);const lines=report.split('\r\n');assert.match(lines[1],/"approved\/one.mp4","needs_review".*,"pass",""$/);assert.match(lines[2],/"approved\/two.mp4","pass".*,"","1"$/);
   }finally{b.close();}
 });

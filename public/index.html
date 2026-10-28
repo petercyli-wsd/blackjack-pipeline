@@ -116,6 +116,13 @@
       <div class="actions" id="batch-zip-actions" hidden><button id="batch-download" disabled>Download ZIP part</button><button id="batch-ack" disabled>ZIP saved: clear part</button><button id="batch-discard" class="quiet">Discard buffered outputs</button></div>
       <details id="batch-more"><summary>More batch actions</summary><p class="help">Recovery and reports. To replace the loaded batch, use Clear CSV beside its filename above.</p><div class="actions"><button id="batch-report">Download row report</button><button id="batch-cancel" disabled>Cancel current row &amp; pause</button><button id="batch-retry" class="quiet">Retry failed / interrupted rows</button><button id="batch-skip" class="quiet">Skip interrupted rows</button></div></details>
       <p id="batch-status" role="status" aria-live="polite">Load a CSV to begin.</p>
+      <section id="human-review" class="human-review" hidden aria-labelledby="hr-title">
+        <div class="hr-head"><div><h3 id="hr-title">Your review</h3><p id="hr-count" class="hr-count"></p><p id="hr-tally" class="help" aria-live="polite"></p></div><button id="hr-open" class="primary">Review one by one</button></div>
+        <div class="hr-bar"><div id="hr-filter" class="hr-filter" role="group" aria-label="Show"><button data-f="todo">To decide <span></span></button><button data-f="pass">Fine <span></span></button><button data-f="redo">Redo <span></span></button><button data-f="all">All <span></span></button></div><button id="hr-rest" class="quiet">Mark undecided as Fine</button></div>
+        <div class="hr-folder"><span id="hr-folder"></span><button id="hr-pick" class="quiet">Choose results folder</button></div>
+        <div id="hr-grid" class="hr-grid"></div><p id="hr-empty" class="help" hidden></p>
+        <div class="hr-apply"><label id="hr-redo-wrap">Redo with<select id="hr-redo-method"><option value="auto">Auto: FILM &#8596; RIFE, others the same</option></select></label><div class="hr-apply-go"><button id="hr-apply" class="primary">Apply decisions</button><p id="hr-apply-help" class="help"></p></div></div>
+      </section>
       <p class="help">Keep this tab open and your computer awake while processing. Reloading restores the queue, but you must reselect source/destination folders. Keys are never checkpointed. A server restart can lose the current job; check its provider request before retrying. Free hosting is suitable for pilots, not guaranteed unattended bulk production.</p>
       <div class="batch-table-wrap"><table><thead><tr><th>Row</th><th>Output</th><th>Method / requested duration</th><th>Status / error</th></tr></thead><tbody id="batch-rows"></tbody></table></div>
       <div class="actions"><button id="batch-prev" class="quiet">Previous 50</button><span id="batch-page" class="help"></span><button id="batch-next" class="quiet">Next 50</button></div>
@@ -133,8 +140,19 @@
       <details class="processing-log"><summary>Processing log</summary><pre id="log" aria-label="Processing log"></pre></details>
     </article>
   </section>
+  <dialog id="hr-dialog" class="hr-dialog" aria-labelledby="hr-name">
+    <div class="hr-stage"><video id="hr-video" muted playsinline aria-label="Flagged clip"></video><p id="hr-missing" class="help" hidden>This clip isn't in the chosen results folder.</p>
+      <div class="hr-controls"><button id="hr-loop" class="quiet" title="L">Loop the join</button><button id="hr-speed" class="quiet" title="S">1&#215;</button><span class="help">Space play/pause &#183; , . frame step &#183; &#8592; &#8594; previous/next</span></div></div>
+    <aside class="hr-side">
+      <div class="hr-nav"><button id="hr-prev" class="quiet" aria-label="Previous clip">&#8592;</button><span id="hr-position"></span><button id="hr-next" class="quiet" aria-label="Next clip">&#8594;</button><button id="hr-close" class="quiet">Close</button></div>
+      <h3 id="hr-name"></h3><p id="hr-facts" class="help"></p>
+      <p id="hr-summary" class="hr-summary"></p><ul id="hr-issues" class="hr-issues"></ul>
+      <div class="hr-decide"><button id="hr-pass" class="hr-fine">Fine <kbd>F</kbd></button><button id="hr-redo" class="hr-redo">Redo <kbd>R</kbd></button></div>
+      <p class="help">Deciding moves on to the next clip. Nothing changes on disk until you choose Apply decisions. <kbd>U</kbd> clears a decision.</p>
+    </aside>
+  </dialog>
   <footer>Try FILM or RIFE for a small pose gap; Kling or Seedance for new motion. Inspect fingers, cards and chips at both joins.</footer>
 </main>
-<script src="notices.js"></script><script src="browser.js"></script><script src="frame-rate.js"></script><script src="renderer.js"></script><script src="batch-format.js"></script><script src="batch-settings.js"></script><script src="batch-zip.js"></script><script src="batch-estimates.js"></script><script src="batch-replace.js"></script><script src="batch.js"></script>
+<script src="notices.js"></script><script src="browser.js"></script><script src="frame-rate.js"></script><script src="renderer.js"></script><script src="batch-format.js"></script><script src="batch-settings.js"></script><script src="batch-zip.js"></script><script src="batch-estimates.js"></script><script src="batch-replace.js"></script><script src="batch.js"></script><script src="batch-review.js"></script>
 </body>
 </html>

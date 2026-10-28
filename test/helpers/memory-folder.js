@@ -7,17 +7,21 @@ function memoryFolder(initial={}){
   function directory(prefix=''){
     const full=name=>prefix?prefix+'/'+name:name;
     return {name:prefix.split('/').at(-1)||'originals',
+      async removeEntry(name){const path=full(name);if(!data.delete(path))throw missing();},
       async getDirectoryHandle(name,{create=false}={}){const path=full(name);if(!directories.has(path)){if(!create)throw missing();directories.add(path);}return directory(path);},
       async getFileHandle(name,{create=false}={}){
         const path=full(name);if(!data.has(path)){if(!create)throw missing();put(path,'');}
         return {
           async getFile(){const value=data.get(path);if(!value)throw missing();return new File([value.blob],name,{lastModified:value.modified});},
           async createWritable(){
-            const chunks=[];let aborted=false;
-            return {async write(chunk){if(options.failWrite?.(path))throw new Error('Disk write failed');chunks.push(chunk);},
-              async close(){if(aborted)throw new Error('Already aborted');if(options.beforeClose)await options.beforeClose(path);if(options.failClose?.(path))throw new Error('Disk commit failed');put(path,new Blob(chunks));writes.push(path);},
-              async abort(){aborted=true;}
-            };
+            // A real WritableStream (folder saves pipe into it) that also takes write(chunk) calls.
+            const chunks=[];
+            const stream=new WritableStream({
+              write(chunk){if(options.failWrite?.(path))throw new Error('Disk write failed');chunks.push(chunk);},
+              async close(){if(options.beforeClose)await options.beforeClose(path);if(options.failClose?.(path))throw new Error('Disk commit failed');put(path,new Blob(chunks));writes.push(path);}
+            });
+            stream.write=async chunk=>{const writer=stream.getWriter();try{await writer.write(chunk);}finally{writer.releaseLock();}};
+            return stream;
           }
         };
       }
