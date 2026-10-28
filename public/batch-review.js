@@ -249,7 +249,7 @@
   $('hr-filter').onclick=e=>{const b=e.target.closest('[data-f]');if(!b)return;filter=b.dataset.f;render();};
   $('hr-open').onclick=()=>{const list=visible();if(list.length)open(list[0].id);};
   $('hr-rest').onclick=markRest;
-  $('hr-pick').onclick=async()=>{try{root=await window.showDirectoryPicker({mode:'readwrite',id:'studio-batch-review',...(folder()?{startIn:folder()}:{})});forget();$('hr-grid').dataset.ids='';render();}catch(e){if(e.name!=='AbortError')batch.message(e.message,true);}};
+  $('hr-pick').onclick=async()=>{try{root=await window.showDirectoryPicker({mode:'readwrite',id:'studio-batch-review',...(folder()?{startIn:folder()}:{})});batch.adoptDestination(root);forget();$('hr-grid').dataset.ids='';render();}catch(e){if(e.name!=='AbortError')batch.message(e.message,true);}};
   $('hr-apply').onclick=batch.exclusive(apply);
   $('hr-pass').onclick=()=>choose('pass');$('hr-redo').onclick=()=>choose('redo');
   $('hr-prev').onclick=()=>{focus--;show();};$('hr-next').onclick=()=>{focus++;show();};

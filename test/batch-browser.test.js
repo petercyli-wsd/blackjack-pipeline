@@ -585,3 +585,30 @@ test('human review: decide flagged clips in the grid and player, survive reload,
     assert.match(report,/"human_review","human_redos"/);const lines=report.split('\r\n');assert.match(lines[1],/"approved\/one.mp4","needs_review".*,"pass",""$/);assert.match(lines[2],/"approved\/two.mp4","pass".*,"","1"$/);
   }finally{b.close();}
 });
+
+test('a downloaded row report restores a finished batch for human review and redo after the checkpoint is gone',async()=>{
+  const env=environment(),folder=memoryFolder();
+  const flagged={decisionPolicy:DECISION_POLICY,verdict:'needs_review',summary:'Hand pops at the join.',selectedAttempt:0,redoCount:0,pauseBatch:false,attempts:[{attempt:0,source:'generated',assessment:{verdict:'uncertain',confidence:.6,issues:[]}}]};
+  env.review=n=>n<=2?flagged:{...flagged,verdict:'pass',summary:'Clean.'};
+  const b=await browser(env,{folder:folder.root});
+  try{
+    b.$('batch-destination').value='folder';b.$('batch-destination').onchange();await b.$('batch-output-folder').onclick();
+    await b.load('first_half,second_half,output,method,duration\na.mp4,b.mp4,one.mp4,film,0.33\na.mp4,b.mp4,two.mp4,film,0.67\na.mp4,b.mp4,three.mp4,film,0.33');
+    await b.$('batch-start').onclick();
+    b.$('batch-report').onclick();const report=await env.downloads.at(-1).text();
+    await b.$('batch-reset').onclick();assert.equal(await b.state(),null);assert.equal(b.$('human-review').hidden,true);
+    await b.load(report,'batch-report.csv');
+    assert.match(b.$('batch-status').textContent,/restored from its row report: 3 saved \(2 flagged for your review\), 0 failed/);
+    const q=await b.state();assert.deepEqual(q.rows.map(r=>[r.state,r.savedName,r.resolvedSettings.method]),[['saved','needs-review/one.mp4','film'],['saved','needs-review/two.mp4','film'],['saved','approved/three.mp4','film']]);
+    assert.equal(q.rows[0].result.review.summary,'Hand pops at the join.');
+    assert.equal(b.$('human-review').hidden,false);assert.match(b.$('hr-count').textContent,/2 clips flagged/);
+    await b.$('hr-pick').onclick();
+    const cards=[...b.$('hr-grid').querySelectorAll('.hr-card')];
+    cards[0].querySelector('[data-v=pass]').onclick();cards[1].querySelector('[data-v=redo]').onclick();
+    await until(async()=>(await b.state()).rows[1].humanDecision==='redo');
+    await b.$('hr-apply').onclick();
+    await until(async()=>(await b.state()).rows[1].state==='saved');
+    assert.deepEqual([...folder.data.keys()].sort(),['approved/one.mp4','approved/three.mp4','approved/two.mp4','rejected/two.mp4']);
+    assert.equal(env.calls,4);assert.equal(env.submissions.at(-1).method,'rife');
+  }finally{b.close();}
+});

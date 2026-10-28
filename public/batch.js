@@ -219,9 +219,38 @@
       const file=$('batch-csv').files[0];if(!file)return;if(file.size>20*1048576)throw new Error('CSV limit: 20 MB.');
       const records=BatchFormat.parseCSV(await file.text());
       queue={id:crypto.randomUUID(),csvName:file.name,columns:records.columns,warnings:records.warnings,created:new Date().toISOString(),part:1,inputRoot:$('batch-input-root').value,outputRoot:$('batch-output-root').value,rows:BatchFormat.prepare(records,$('batch-input-root').value,$('batch-output-root').value).map((r,i)=>({...r,id:crypto.randomUUID(),fields:records[i]}))};
+      if(isReport(records)){
+        const counts=restoreReport(records);
+        if(files.size)await match();await checkpoint({allRows:true});render();
+        message(`Batch restored from its row report: ${counts.saved} saved (${counts.flagged} flagged for your review), ${counts.failed} failed, ${counts.pending} not yet run. Choose the results folder to watch the clips; to redo or continue, also select the source folder and enter your keys.`,false,true);
+        return;
+      }
       if(files.size)await match();await checkpoint({allRows:true});render();message('CSV loaded. Validate file matching, choose the method and destination, then start.'+(queue.warnings?.length?' '+queue.warnings.join(' '):''),false,!!queue.warnings?.length);
     }catch(e){queue=previousQueue;message(e.message,true);}finally{$('batch-csv').value='';render();}
   };
+  // A downloaded row report restores its batch: saved rows keep their files, reviews and settings,
+  // so flagged clips can be reviewed (and redone) after the browser checkpoint is gone.
+  const isReport=records=>['status','saved_path','quality_details'].every(c=>records.columns?.includes(c));
+  function restoreReport(records){
+    const methods=ui.methods(),counts={saved:0,flagged:0,failed:0,pending:0};
+    queue.workflow='generate';queue.destination='folder';queue.restoredFromReport=true;queue.warnings=[];$('batch-workflow').value='generate';$('batch-destination').value='folder';
+    queue.rows.forEach((row,i)=>{
+      const cell=name=>{const v=records[i][records.columns.indexOf(name)]??'';return /^'[=+@\-\t\r]/.test(v)?v.slice(1):v;};
+      const status=cell('status');
+      if(row.state==='invalid')return;
+      const method=methods.find(m=>m.id===cell('method')),duration=Number(cell('duration'));
+      if(method&&Number.isFinite(duration))row.resolvedSettings={method:method.id,duration,provider:method.provider,methodSource:'csv',durationSource:'csv',settingSource:'csv'};
+      if(status==='saved'&&cell('saved_path')){
+        let review;try{review=cell('quality_details')?JSON.parse(cell('quality_details')):undefined;}catch{review=undefined;}
+        Object.assign(row,{state:'saved',error:'',savedName:cell('saved_path'),result:{review,bridgeDuration:Number(cell('actual_bridge_seconds'))||undefined,bridgeFrames:Number(cell('bridge_frames'))||undefined,fpsRational:cell('encoded_fps')||undefined}});
+        if(cell('human_review')==='pass')row.humanReview={verdict:'pass',at:queue.created,from:'row report'};
+        if(Number(cell('human_redos')))row.humanRedos=Number(cell('human_redos'));
+        counts.saved++;if(review?.verdict==='needs_review'&&!row.humanReview)counts.flagged++;
+      }else if(['failed','cancelled','uncertain'].includes(status)){row.state='failed';row.error=cell('error')||`${status} in the original run`;counts.failed++;}
+      else counts.pending++;
+    });
+    return counts;
+  }
   $('batch-validate').onclick=async()=>{try{await match();await checkpoint({allRows:true});const invalid=queue.rows.filter(r=>r.state==='invalid').length;message(`Validation complete: ${queue.rows.filter(r=>r.state==='pending').length} ready, ${invalid} invalid. Invalid rows will be skipped; review their errors below.`,false,invalid>0);}catch(e){message(e.message,true);}};
   $('batch-template').onclick=()=>download(new Blob(['first_half,second_half,output,method,duration\r\ntable-01/first.mp4,table-01/second.mp4,film.mp4,film,0.33\r\ntable-02/first.mp4,table-02/second.mp4,kling.mp4,kling-fal,3\r\ntable-03/first.mp4,table-03/second.mp4,panel.mp4,,\r\n'],{type:'text/csv'}),'batch-example.csv');
   $('batch-destination').onchange=()=>{existingFiles=new Map();$('batch-existing-folder').value='';$('batch-existing-info').textContent='Reselect your existing output folder when using copy mode.';render();};
@@ -509,6 +538,8 @@
   window.studioBatch={
     get queue(){return queue;},get buffered(){return buffered;},get destination(){return destination;},get running(){return running||editing;},
     hasSources:()=>files.size>0,resolve:resolveRow,checkpoint,render,message,exclusive,requeue:requeueReviewedRow,
+    // A results folder picked for review is also where redos save, unless one is already chosen.
+    adoptDestination(handle){if(!destination&&queue?.destination==='folder'){destination=handle;render();}},
     setBuffered(id,item){buffered=item?buffered.map(x=>x.id===id?item:x):buffered.filter(x=>x.id!==id);},
     // Apply runs under the lease; start once it is released.
     async startAfterLease(){while(editing)await wait(20);return $('batch-start').onclick();}
