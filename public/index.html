@@ -156,7 +156,7 @@
   </section>
   <dialog id="hr-dialog" class="hr-dialog" aria-labelledby="hr-name">
     <div class="hr-stage"><video id="hr-video" muted playsinline aria-label="Flagged clip"></video><p id="hr-missing" class="help" hidden>This clip isn't in the chosen results folder.</p>
-      <div class="hr-controls"><button id="hr-loop" class="quiet" title="L">Loop the join</button><button id="hr-speed" class="quiet" title="S">1&#215;</button><span class="help">Space play/pause &#183; , . frame step &#183; &#8592; &#8594; previous/next</span></div></div>
+      <div class="hr-controls"><button id="hr-loop" class="quiet" title="L">Loop the join</button><label class="hr-rate" for="hr-rate">Speed<input id="hr-rate" type="range" min="0.05" max="2" step="0.05" value="1" aria-describedby="hr-rate-out"><output id="hr-rate-out" for="hr-rate">1&#215;</output></label><span class="help">Space play/pause &#183; , . frame step &#183; [ ] slower/faster &#183; S 1&#215;/&#189;&#215;/&#188;&#215;/0.1&#215; &#183; &#8592; &#8594; previous/next</span></div></div>
     <aside class="hr-side">
       <div class="hr-nav"><button id="hr-prev" class="quiet" aria-label="Previous clip">&#8592;</button><span id="hr-position"></span><button id="hr-next" class="quiet" aria-label="Next clip">&#8594;</button><button id="hr-close" class="quiet">Close</button></div>
       <h3 id="hr-name"></h3><p id="hr-facts" class="help"></p>

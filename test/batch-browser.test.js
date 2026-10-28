@@ -564,6 +564,9 @@ test('human review: decide flagged clips in the grid and player, survive reload,
     assert.deepEqual(cards().map(c=>c.querySelector('code').textContent),['two.mp4']);
     cards()[0].querySelector('.hr-thumb').onclick();await until(()=>b.$('hr-name').textContent==='two.mp4');
     assert.match(b.$('hr-issues').textContent,/0.90s Major/);
+    b.$('hr-rate').value='0.35';b.$('hr-rate').oninput();assert.equal(b.$('hr-video').playbackRate,0.35);assert.equal(b.$('hr-rate-out').textContent,'0.35×');
+    b.w.document.dispatchEvent(new b.w.KeyboardEvent('keydown',{key:']'}));assert.equal(b.$('hr-video').playbackRate,0.4);
+    b.w.document.dispatchEvent(new b.w.KeyboardEvent('keydown',{key:'s'}));assert.equal(b.$('hr-video').playbackRate,1);
     b.w.document.dispatchEvent(new b.w.KeyboardEvent('keydown',{key:'r'}));
     await until(async()=>(await b.state()).rows[1].humanDecision==='redo');
     assert.match(b.$('hr-tally').textContent,/0 to decide · 1 fine · 1 redo/);

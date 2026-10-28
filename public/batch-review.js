@@ -5,8 +5,8 @@
 (()=>{
   const $=id=>document.getElementById(id),batch=window.studioBatch;
   const PAD=.6; // seconds of source shown either side of the bridge when looping the join
-  const SPEEDS=[1,.5,.25];
-  let root=null,filter='todo',focus=-1,speed=0,loopJoin=true,observer=null;
+  const PRESETS=[1,.5,.25,.1]; // S steps through these; the slider and [ ] go anywhere from 0.05x to 2x
+  let root=null,filter='todo',focus=-1,rate=1,loopJoin=true,observer=null;
   const urls=new Map(); // row id -> object URL
   const q=()=>batch.queue;
   const flagged=()=>(q()?.rows||[]).filter(r=>['saved','buffered'].includes(r.state)&&r.result?.review?.verdict==='needs_review'&&!r.humanReview);
@@ -188,12 +188,13 @@
     const url=await clipURL(row).catch(()=>null);
     $('hr-missing').hidden=!!url;
     if(video.dataset.id!==row.id){video.dataset.id=row.id;video.src=url||'';loop(video,row);}
-    video.playbackRate=SPEEDS[speed];syncToggles();
+    video.playbackRate=rate;syncToggles();
     if(url)Promise.resolve(video.play?.()).catch(()=>{});
   }
+  function setRate(value){rate=Math.min(2,Math.max(.05,Math.round(value*20)/20));$('hr-video').playbackRate=rate;syncToggles();}
   function syncToggles(){
     $('hr-loop').setAttribute('aria-pressed',String(loopJoin));
-    $('hr-speed').textContent=`${SPEEDS[speed]}×`;
+    $('hr-rate').value=String(rate);$('hr-rate-out').textContent=`${+rate.toFixed(2)}×`;
   }
   async function choose(value){
     const list=visible(),row=list[focus];if(!row)return;
@@ -208,7 +209,7 @@
     if(!$('hr-dialog').open||e.target.closest?.('select,input,textarea'))return;
     const v=$('hr-video'),k=e.key.toLowerCase();
     const map={f:()=>choose('pass'),r:()=>choose('redo'),u:()=>choose(null),arrowright:()=>{focus++;show();},arrowleft:()=>{focus--;show();},j:()=>{focus++;show();},k:()=>{focus--;show();},
-      ' ':()=>v.paused?v.play():v.pause(),l:()=>{loopJoin=!loopJoin;syncToggles();},s:()=>{speed=(speed+1)%SPEEDS.length;v.playbackRate=SPEEDS[speed];syncToggles();},',':()=>step(-1),'.':()=>step(1)};
+      ' ':()=>v.paused?v.play():v.pause(),l:()=>{loopJoin=!loopJoin;syncToggles();},s:()=>setRate(PRESETS[(PRESETS.indexOf(rate)+1)%PRESETS.length]),'[':()=>setRate(rate-.05),']':()=>setRate(rate+.05),',':()=>step(-1),'.':()=>step(1)};
     if(map[k]){e.preventDefault();map[k]();}
   }
 
@@ -255,7 +256,7 @@
   $('hr-prev').onclick=()=>{focus--;show();};$('hr-next').onclick=()=>{focus++;show();};
   $('hr-close').onclick=close;$('hr-dialog').addEventListener('close',()=>{$('hr-video').pause?.();render();});
   $('hr-loop').onclick=()=>{loopJoin=!loopJoin;syncToggles();};
-  $('hr-speed').onclick=()=>{speed=(speed+1)%SPEEDS.length;$('hr-video').playbackRate=SPEEDS[speed];syncToggles();};
+  $('hr-rate').oninput=()=>setRate(Number($('hr-rate').value));
   document.addEventListener('keydown',keys);
   window.addEventListener('studio:ready',()=>{methods();render();});
   window.BatchReview={render,apply,decide};
