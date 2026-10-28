@@ -163,4 +163,4 @@ async function processVideos(o,{dir,key,signal,log=()=>{},generator=generate,onP
   const resultInfo=await probe(output,signal);
   return {output,preview,...comparison,frames,joinStart,...bridgeMetadata,duration:resultInfo.duration,fps:resultInfo.fps,fpsRational:resultInfo.fpsRational,width:w,height:h};
 }
-module.exports={ff,probe,processVideos,localBridge,extractBoundary,createComparison};
+module.exports={ff,run,ffmpeg,ffprobe,probe,processVideos,localBridge,extractBoundary,createComparison};

@@ -3,7 +3,7 @@ let methods=[],clips={},result=null,busy=false,importing=false,keyReady={fal:fal
 let reviewMode='preview',defaultPrompt='',batchContext={active:false,hasGenerative:false};
 const selectedMethod=()=>methods.find(m=>m.id===$('method').value);
 const qualitySettings=()=>({mode:$('quality-mode').value,maxRetries:Number($('quality-retries').value),appearance:$('quality-appearance').value});
-const hasPendingKeys=()=>!!($('fal-key').value.trim()||$('kie-key').value.trim());
+const hasPendingKeys=()=>!!($('fal-key').value.trim()||$('kie-key').value.trim()||$('runninghub-key')?.value.trim());
 const status=(text,error=false)=>{$('status').textContent=text;$('status').classList.toggle('error',error);if(error)window.StudioNotice.show({id:'single',message:text,kind:'error',target:'status'});else window.StudioNotice.dismiss('single');};
 const fail=e=>status(e.message.replace(/^Error invoking remote method '[^']+': Error: /,''),true);
 function renderFailure(e){
@@ -58,16 +58,18 @@ function updateBatchContext(){
 }
 function keyStatus(k){
   keyReady={fal:!!k.fal,kie:!!k.kie};
-  $('key-status').textContent=`fal: ${k.fal?'ready for this session':'not set'}  |  KIE: ${k.kie?'ready for this session':'not set'}`;
+  $('key-status').textContent=`fal: ${k.fal?'ready':'not set'}  ·  KIE: ${k.kie?'ready':'not set'}${k.runninghub===undefined?'':`  ·  RunningHub: ${k.runninghub?'ready':'not set'}`}`;
+  window.studioKeys=k;window.dispatchEvent(new CustomEvent('studio:keys',{detail:k}));
   if(k.warning)status(k.warning,true);readiness();
 }
-for(const provider of ['fal','kie']){
+for(const provider of ['fal','kie','runninghub']){
+  if(!$(`${provider}-key`))continue;
   $(`${provider}-key`).addEventListener('input',readiness);
   $(`${provider}-key`).addEventListener('keydown',e=>{if(e.key==='Enter'&&!$('save-keys').disabled){e.preventDefault();$('save-keys').click();}});
 }
 async function applyKeys(){
-  const keys=await window.studio.setKeys({fal:$('fal-key').value,kie:$('kie-key').value});
-  $('fal-key').value='';$('kie-key').value='';keyStatus(keys);
+  const keys=await window.studio.setKeys({fal:$('fal-key').value,kie:$('kie-key').value,...($('runninghub-key')?.value.trim()?{runninghub:$('runninghub-key').value}:{})});
+  $('fal-key').value='';$('kie-key').value='';if($('runninghub-key'))$('runninghub-key').value='';keyStatus(keys);
 }
 $('save-keys').onclick=async()=>{
   $('save-keys').disabled=true;
@@ -75,7 +77,7 @@ $('save-keys').onclick=async()=>{
 };
 $('forget-keys').onclick=async()=>{
   $('forget-keys').disabled=true;
-  try{const keys=await window.studio.forgetKeys();$('fal-key').value='';$('kie-key').value='';keyStatus(keys);$('key-feedback').textContent='Session keys cleared.';}catch(e){$('key-feedback').textContent=e.message;fail(e);}finally{readiness();}
+  try{const keys=await window.studio.forgetKeys();$('fal-key').value='';$('kie-key').value='';if($('runninghub-key'))$('runninghub-key').value='';keyStatus(keys);$('key-feedback').textContent='Session keys cleared.';}catch(e){$('key-feedback').textContent=e.message;fail(e);}finally{readiness();}
 };
 for(const slot of ['a','b']){
   $(`pick-${slot}`).onclick=async()=>{
@@ -164,7 +166,7 @@ window.studio.init().then(data=>{
     for(const m of methods.filter(filter)){const option=document.createElement('option');option.value=m.id;option.textContent=m.name;group.append(option);}
     $('method').append(group);
   }
-  defaultPrompt=data.prompt;$('prompt').value=defaultPrompt;keyStatus(data.keys);methodChange();
+  defaultPrompt=data.prompt;$('prompt').value=defaultPrompt;keyStatus(data.pipelines?{...data.keys,runninghub:!!data.pipelineKeys?.runninghub}:data.keys);methodChange();
   window.dispatchEvent(new Event('studio:ready'));
   if(data.activeJob&&!data.activeBatch){
     status('Your previous render is still running. Use Reconnect to render.');offerReconnect(data.activeJob);
@@ -172,7 +174,7 @@ window.studio.init().then(data=>{
 }).catch(fail);
 readiness();
 window.studioUI={
-  isBusy:()=>busy||importing,lock:setBusy,applyKeys,methods:()=>methods,
+  isBusy:()=>busy||importing,lock:setBusy,applyKeys,keyStatus,methods:()=>methods,
   setBatchContext:context=>{batchContext=context;updateBatchContext();},
   settings:()=>({method:$('method').value,duration:Number($('duration').value),fps:$('fps').value.trim(),prompt:$('prompt').value,mute:$('mute').checked,review:qualitySettings()}),
   restoreSettings:o=>{$('method').value=o.method;methodChange();for(const id of ['duration','fps','prompt'])$(id).value=o[id];$('mute').checked=o.mute;$('quality-mode').value=o.review?.mode||'off';$('quality-retries').value=o.review?.maxRetries??1;$('quality-appearance').value=o.review?.appearance||'strict';readiness();}

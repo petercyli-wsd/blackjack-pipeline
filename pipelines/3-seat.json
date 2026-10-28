@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "id": "3-seat",
+  "name": "3-seat blackjack",
+  "tagline": "One dealer take in, a playable 3-seat table out.",
+  "enabled": true,
+  "game": {
+    "name": "3-seat-blackjack",
+    "localPath": "../3-seat-blackjack",
+    "repo": "https://github.com/petercyli-wsd/3-seat-blackjack.git",
+    "ref": "main",
+    "contractFile": "blackjack-pipeline.json",
+    "exclude": ["game_assets", "bridges", "pipeline/work", "pipeline/.venv", "app/node_modules", "app/dist", "app/shots", ".vite", "node_modules"],
+    "carry": [
+      {"path": "game_assets/scene/sets", "why": "Studio sets are made from the app's render of the table, not from the take, so they carry over while the camera stays put."},
+      {"path": "game_assets/scene/sets.json"},
+      {"path": "game_assets/scene/materials", "why": "Table textures (felt, leather, wood) made once from Poly Haven scans by bj3.materials, not from the take."},
+      {"path": "pipeline/work/sam2.1_hiera_small.pt", "why": "SAM 2 weights for the landing pass (downloaded by the pipeline when absent)."}
+    ]
+  },
+  "input": {
+    "label": "Dealer take",
+    "help": "One continuous, locked-off take: a cycle for each of the 7 seat combinations, then the full-table round with hits. Export it uncropped.",
+    "width": 1440,
+    "height": 810,
+    "fps": "24000/1001",
+    "minSeconds": 120,
+    "maxSeconds": 3600,
+    "maxBytes": 8589934592,
+    "opencvCheck": true
+  },
+  "toolchains": {
+    "python": {"dir": "pipeline", "lock": ["pyproject.toml", "uv.lock"], "extras": ["sam"]},
+    "node": {"dir": "app", "lock": ["package.json", "package-lock.json"]}
+  },
+  "stages": [
+    {
+      "id": "clips",
+      "title": "Clips",
+      "kind": "command",
+      "summary": "Cut the take into the clips and loops the game plays, measure every card, and plan the transitions between clips.",
+      "cwd": "pipeline",
+      "run": ["{python}", "-m", "bj3", "{input}", "--out", "../game_assets", "--work", "work"],
+      "markers": {"start": "^\\[run \\] (\\S+)", "done": "^\\[done\\] (\\S+)", "cached": "^\\[skip\\] (\\S+)"},
+      "steps": [
+        {"id": "signals", "title": "Read the take", "detail": "Card and motion signals for every frame", "outputs": ["pipeline/work/signals.npz"]},
+        {"id": "pose", "title": "Dealer pose", "detail": "A fingerprint of her arms in every frame", "outputs": ["pipeline/work/pose.npz"]},
+        {"id": "tracker", "title": "Track cards", "detail": "Every physical card: outline, landing, flip and pickup", "outputs": ["pipeline/work/cards.json"]},
+        {"id": "settle", "title": "Settle cards", "detail": "Each card's resting outline over its whole stay", "outputs": ["pipeline/work/rest.json"]},
+        {"id": "flight", "title": "Follow cards in flight", "detail": "Outlines while she slides each card in", "outputs": ["pipeline/work/flights.json"]},
+        {"id": "edl", "title": "Cut into clips", "detail": "Finds every round and its phases", "outputs": ["pipeline/work/edl.json", "pipeline/work/edl.pre-recut.json"]},
+        {"id": "review", "title": "Contact sheets", "detail": "A still of every cut, to check by eye", "outputs": ["pipeline/work/review"], "gallery": "pipeline/work/review/*.jpg"},
+        {"id": "export", "title": "Export clips & loops", "detail": "Trimmed clips plus ping-pong loops", "outputs": ["game_assets/clips", "game_assets/loops"]},
+        {"id": "manifest", "title": "Manifest & card landings", "detail": "What the game reads, seat masks, SAM 2 landings", "outputs": ["game_assets/manifest.json", "game_assets/masks", "game_assets/CLIPS.md", "pipeline/work/landing_hulls.json"]},
+        {"id": "bridges-plan", "title": "Plan transitions", "detail": "Exit frames, method and length for every cut", "outputs": ["bridges/plan.json", "bridges/stubs", "bridges/*.csv"]},
+        {"id": "bridges-local", "title": "Stand-in transitions", "detail": "Optical-flow bridges so every cut plays something", "outputs": ["game_assets/bridges.json", "game_assets/bridges/flow"]}
+      ],
+      "verify": [
+        {
+          "json": "game_assets/manifest.json",
+          "field": "clips",
+          "requireKeys": ["opening_idle", "001_deal", "001_wait", "001_reveal", "001_hold", "001_discard", "001_idle", "010_deal", "010_wait", "010_reveal", "010_hold", "010_discard", "010_idle", "011_deal", "011_wait", "011_reveal", "011_hold", "011_discard", "011_idle", "100_deal", "100_wait", "100_reveal", "100_hold", "100_discard", "100_idle", "101_deal", "101_wait", "101_reveal", "101_hold", "101_discard", "101_idle", "110_deal", "110_wait", "110_reveal", "110_hold", "110_discard", "110_idle", "111_deal", "111_wait", "111_reveal", "111_hold", "111_discard", "111_idle", "full_table_deal", "full_table_wait", "full_table_reveal", "full_table_hold", "full_table_discard", "full_table_idle", "seat1_card3_deal", "seat1_card3_wait", "seat1_card4_deal", "seat1_card4_wait", "seat1_card5_deal", "seat1_card5_wait", "seat1_card6_deal", "seat1_card6_wait", "seat2_card3_deal", "seat2_card3_wait", "seat2_card4_deal", "seat2_card4_wait", "seat2_card5_deal", "seat2_card5_wait", "seat2_card6_deal", "seat2_card6_wait", "seat3_card3_deal", "seat3_card3_wait", "seat3_card4_deal", "seat3_card4_wait", "seat3_card5_deal", "seat3_card5_wait", "seat3_card6_deal", "seat3_card6_wait"],
+          "message": "The game needs a clip for every seat combination and every hit, but these weren't found in the take: {missing}.",
+          "fix": "Check the contact sheets. The take must hold all 7 seat combinations (001-111) and then the full table with each seat hit to 6 cards."
+        },
+        {"exists": "bridges/bridges_onejob.csv", "message": "The transition plan wasn't written."}
+      ],
+      "errorHints": [
+        {"match": "No module named '(sam2|torch)'", "message": "SAM 2 isn't installed in the Python toolchain, so card landings can't be traced.", "fix": "Redo from Set up to reinstall the Python tools."},
+        {"match": "assert spec is not None", "message": "Python couldn't load SAM 2's settings: this app's data folder is too deep for Windows' 260-character path limit.", "fix": "Turn on Windows long paths (admin PowerShell: New-ItemProperty -Path HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force, then restart), or start the app with DATA_DIR set to a short folder such as C:\\bp-data. Then redo from Set up."},
+        {"match": "StopIteration", "message": "A round in the take has no face-down hole card, so it couldn't be cut into phases.", "fix": "Check every round in the take is dealt as usual: two cards per seat, the dealer's up card and a face-down hole card."},
+        {"match": "no quiet (?:after|before) (\\d+)", "message": "Couldn't find a moment where the table is still, near frame $1.", "fix": "Each phase needs the dealer at rest for about 0.4 s. Check the take around that frame."},
+        {"match": "AssertionError: \\('([^']+)'", "message": "Cutting failed at “$1”: that segment ends before it starts.", "fix": "The rounds may be out of order. The take must run the 7 seat combinations first, then the full table."},
+        {"match": "IndexError", "message": "The video ended earlier than its header says.", "fix": "The file is probably truncated. Re-export the take and start a new run."},
+        {"match": "MemoryError|Unable to allocate", "message": "This computer ran out of memory.", "fix": "Close other heavy apps, then resume."}
+      ]
+    },
+    {
+      "id": "scene",
+      "title": "Scene masks",
+      "kind": "command",
+      "optional": true,
+      "default": true,
+      "summary": "The set without the dealer, plus masks that let the game swap the room and table around her. Free; runs on this computer.",
+      "cwd": "pipeline",
+      "run": ["{python}", "-m", "bj3.scene", "../game_assets"],
+      "outputs": ["game_assets/scene/reference.png", "game_assets/scene/masks.png", "game_assets/scene/clutter.png", "game_assets/scene/scene.json"]
+    },
+    {
+      "id": "mattes",
+      "title": "Dealer mattes",
+      "kind": "command",
+      "optional": true,
+      "default": false,
+      "summary": "A MatAnyone matte of the dealer for every clip, for a cleaner cut-out in studio sets. Uses RunningHub credits.",
+      "keys": ["runninghub"],
+      "env": {"RUNNINGHUB_API_KEY": "{key:runninghub}"},
+      "cwd": "pipeline",
+      "run": ["{python}", "-m", "bj3.mattes", "--assets", "../game_assets"],
+      "outputs": ["game_assets/matted", "game_assets/scene/mattes.json", "pipeline/work/mattes"],
+      "errorHints": [
+        {"match": "RUNNINGHUB_API_KEY is not set", "message": "RunningHub needs a key.", "fix": "Add your RunningHub key under Provider keys, then resume."}
+      ]
+    },
+    {
+      "id": "transitions",
+      "title": "Transitions",
+      "kind": "transitions",
+      "summary": "Generate the short moves the game plays between clips that weren't filmed back to back, check them, and bring them into the game.",
+      "csv": "bridges/bridges_onejob.csv",
+      "sourceRoot": "bridges/stubs",
+      "ingest": {
+        "cwd": "pipeline",
+        "run": ["{python}", "-m", "bj3.bridges", "ingest", "{outputs}"],
+        "failed": "^\\s+! ([^:]+): (.*)$",
+        "flagged": "^\\s+\\? ([^:]+): (.*)$",
+        "summary": "^bridges\\.json: (.*)$"
+      },
+      "verdict": {"cwd": "pipeline", "run": ["{python}", "-m", "bj3.bridges", "verdict", "{name}", "{value}", "{note}"]},
+      "quality": "bridges/state.json",
+      "verdicts": "bridges/verdicts.json",
+      "registry": "game_assets/bridges.json",
+      "outputs": ["bridges/generated", "bridges/state.json", "bridges/verdicts.json", "bridges/review.html", "game_assets/bridges/tool"],
+      "onReset": [{"cwd": "pipeline", "run": ["{python}", "-m", "bj3.bridges", "resolve"], "if": "bridges/plan.json"}]
+    },
+    {
+      "id": "game",
+      "title": "Game",
+      "kind": "command",
+      "summary": "Insert the clips and transitions into the game code and build a playable table.",
+      "needs": ["node"],
+      "cwd": "app",
+      "run": ["{npm}", "run", "build"],
+      "outputs": ["app/dist"],
+      "verify": [
+        {"exists": "app/dist/index.html", "message": "The build didn't produce index.html."},
+        {"exists": "app/dist/manifest.json", "message": "The clips weren't copied into the build (no manifest.json)."}
+      ],
+      "artifacts": {"site": "app/dist", "assets": "game_assets"},
+      "errorHints": [
+        {"match": "error TS\\d+", "message": "The game code doesn't compile. This is in the game repo's code, not the footage.", "fix": "Fix the TypeScript error in 3-seat-blackjack, then use Update game code and redo this stage."}
+      ]
+    }
+  ]
+}

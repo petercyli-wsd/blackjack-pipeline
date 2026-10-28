@@ -1,8 +1,8 @@
 {
-  "name": "video-interpolation-web",
+  "name": "blackjack-pipeline",
   "version": "1.0.0",
   "private": true,
-  "description": "Team browser app with isolated sessions and bring-your-own provider keys",
+  "description": "Dealer footage in, playable blackjack table out: server-side game pipelines plus the Transition Studio",
   "scripts": {
     "start": "node server.js --open",
     "serve": "node server.js",

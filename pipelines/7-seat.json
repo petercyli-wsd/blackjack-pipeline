@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "id": "7-seat",
+  "name": "7-seat blackjack",
+  "tagline": "A full 7-seat table from one dealer take.",
+  "enabled": false,
+  "disabledReason": "Not produced yet. The 7-seat game and its filming plan are still being designed, so there's no footage or game code to run yet.",
+  "game": {
+    "name": "7-seat-blackjack"
+  },
+  "input": {
+    "label": "Dealer take",
+    "help": "To be decided with the filming plan."
+  },
+  "stages": [
+    {"id": "clips", "title": "Clips", "kind": "command", "summary": "Cut the take into clips for every seat combination and hit.", "run": []},
+    {"id": "transitions", "title": "Transitions", "kind": "transitions", "summary": "Generate the moves between clips that weren't filmed back to back."},
+    {"id": "game", "title": "Game", "kind": "command", "summary": "Build the playable 7-seat table.", "run": []}
+  ]
+}

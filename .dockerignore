@@ -7,3 +7,6 @@
 !src/**
 !public/
 !public/**
+!pipelines/
+!pipelines/**
+!Dockerfile.pipeline

@@ -74,8 +74,21 @@
     finally{activeJob=null;}
   }
   function download(url){const a=document.createElement('a');a.href=`${url}?download=1`;a.download='';document.body.append(a);a.click();a.remove();}
+  // Large uploads with progress (a dealer take can be gigabytes). Resolves with the JSON reply.
+  function uploadFile(route,file,{onProgress=()=>{},signal}={}){
+    return new Promise((resolve,reject)=>{
+      const xhr=new XMLHttpRequest();xhr.open('POST',route);xhr.setRequestHeader('X-Studio-Token',token);
+      xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(e.loaded/e.total,e.loaded,e.total);};
+      xhr.onerror=()=>reject(connectionError(route,null,'the upload was interrupted'));
+      xhr.onabort=()=>reject(Object.assign(new Error('Upload cancelled.'),{name:'AbortError'}));
+      xhr.onload=()=>decode({status:xhr.status,ok:xhr.status>=200&&xhr.status<300,text:async()=>xhr.responseText},route).then(resolve,reject);
+      signal?.addEventListener('abort',()=>xhr.abort(),{once:true});
+      xhr.send(file);
+    });
+  }
   window.studio={
     batchAPI:api,
+    upload:async(route,file,options)=>{await api('/api/init');return uploadFile(route,file,options);},
     batchUpload:async(file,rowId,slot,signal)=>{
       await api('/api/init');
       if(file.size>maxUploadBytes)throw Object.assign(new Error('Video exceeds the 512 MB input limit.'),{status:400});
@@ -103,7 +116,7 @@
     },onProgress:fn=>progress=fn
   };
   document.getElementById('end-session').onclick=async()=>{
-    if(!confirm('End your server session? Your keys and temporary server videos/results will be removed. Browser batch checkpoints and buffered ZIPs remain until you use Clear CSV beside the loaded filename. Download results first. Submitted cloud jobs may still be billed.'))return;
+    if(!confirm(`End your server session? Your Studio keys and temporary server videos/results will be removed. Browser batch checkpoints and buffered ZIPs remain until you use Clear CSV beside the loaded filename. Download results first. Submitted cloud jobs may still be billed.${hosted?'':'\n\nPipeline runs keep running and keep their keys; use Clear keys to remove those too.'}`))return;
     try{await api('/api/logout','POST');location.reload();}catch(e){alert(e.message);}
   };
   document.getElementById('shutdown').onclick=async()=>{

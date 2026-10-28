@@ -9,6 +9,9 @@ const {spawn}=require('node:child_process');
 const {METHODS,DEFAULT_PROMPT,validateOptions}=require('./src/models');
 const {probe,processVideos,createComparison}=require('./src/media');
 const {reviewOptions,reviewCandidate,runValidated}=require('./src/validation');
+const {Engine}=require('./src/pipeline/engine');
+const {previews:createPreviews}=require('./src/pipeline/preview');
+const {pipelineRoutes}=require('./src/pipeline/routes');
 const secret=()=>randomBytes(32).toString('hex');
 const equal=(a,b)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 const json=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
@@ -37,13 +40,39 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
   hosted=process.env.STUDIO_HOSTED==='true'||process.env.RENDER==='true',publicOrigin=process.env.PUBLIC_ORIGIN||process.env.RENDER_EXTERNAL_URL,
   teamPassword=process.env.TEAM_PASSWORD||'',sessionTtlMs=2*60*60*1000,keyTtlMs=8*60*60*1000,
   maxConcurrentJobs=Number(process.env.MAX_CONCURRENT_JOBS)||1,maxSessions=Number(process.env.MAX_SESSIONS)||10,
-  maxUploadBytes=512*1024*1024,jobTimeoutMs=60*60*1000,renderVideo=processVideos,reviewVideo=reviewCandidate}={}){
+  maxUploadBytes=512*1024*1024,jobTimeoutMs=60*60*1000,renderVideo=processVideos,reviewVideo=reviewCandidate,
+  pipelines=!hosted||process.env.PIPELINES_ENABLED==='true',definitionsDir=path.join(__dirname,'pipelines'),appRoot=__dirname,pipelineHooks={},envKeys=false,autoResume=true}={}){
   if(hosted&&(!publicOrigin||new URL(publicOrigin).protocol!=='https:'))throw new Error('Hosted mode requires an HTTPS PUBLIC_ORIGIN (or RENDER_EXTERNAL_URL).');
   if(hosted&&teamPassword.length<16)throw new Error('Hosted mode requires TEAM_PASSWORD with at least 16 characters.');
   let origin=hosted?new URL(publicOrigin).origin:null,closing=false,runningJobs=0;
   const sessions=new Map(),namespace=path.resolve(dataDir,'web-sessions');
   await fs.mkdir(namespace,{recursive:true});
   const instance=await fs.mkdtemp(path.join(namespace,'instance-'));
+  // Pipelines run unattended, so their keys belong to the server, not a browser session. Locally,
+  // keys entered in the Studio also reach them and new browser sessions start with them; hosted,
+  // the two never mix. They live in memory only and expire like session keys, unless supplied
+  // through the environment (FAL_KEY, KIE_API_KEY, RUNNINGHUB_API_KEY).
+  const PROVIDERS=['fal','kie','runninghub'],shared={values:{fal:'',kie:'',runninghub:''},setAt:0,
+    env:envKeys?{fal:process.env.FAL_KEY||'',kie:process.env.KIE_API_KEY||'',runninghub:process.env.RUNNINGHUB_API_KEY||''}:{}};
+  let engine=null;
+  const pipelineKeys={
+    get:p=>shared.env[p]||(Date.now()-shared.setAt<=keyTtlMs?shared.values[p]:'')||'',
+    status:()=>Object.fromEntries(PROVIDERS.map(p=>[p,!!pipelineKeys.get(p)])),
+    set(value){
+      if(!value||typeof value!=='object')throw new Error('Send keys as an object.');
+      let changed=false;
+      for(const p of PROVIDERS)if(typeof value[p]==='string'&&value[p].trim()){if(value[p].length>4096)throw new Error('API key is too long');if(Date.now()-shared.setAt>keyTtlMs)shared.values={fal:'',kie:'',runninghub:''};shared.values[p]=value[p].trim();changed=true;}
+      if(changed){shared.setAt=Date.now();engine?.keysChanged();}
+    },
+    clear(){shared.values={fal:'',kie:'',runninghub:''};}
+  };
+  const previews=createPreviews();
+  let routes=pipelineRoutes({engine:null,previews,hosted,json,body,keys:pipelineKeys,reason:'Pipelines run on a persistent server. Start this app on your own computer (npm start), or set PIPELINES_ENABLED=true on a host with a persistent disk.'});
+  if(pipelines){
+    engine=new Engine({dataDir,definitionsDir,appRoot,keys:pipelineKeys,autoResume,hosted,hooks:{renderVideo,reviewVideo,...pipelineHooks,onRedo:run=>previews.close(run.id)}});
+    await engine.init();
+    routes=pipelineRoutes({engine,previews,hosted,json,body,keys:pipelineKeys});
+  }
   async function removeOwned(dir,parent){
     const resolved=path.resolve(dir),rel=path.relative(path.resolve(parent),resolved);
     if(!rel||rel.startsWith('..')||path.isAbsolute(rel)||rel.includes(path.sep))throw new Error('Invalid cleanup directory');
@@ -56,8 +85,16 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
     if(Date.now()-stat.mtimeMs>24*60*60*1000)await removeOwned(dir,namespace);
   }
   function newSession(){
+    // On your own computer there's one user, so the longest-idle session without work in flight
+    // makes room (scripts and extra browsers would otherwise lock you out). Hosted teams get the limit.
+    if(sessions.size>=maxSessions&&!hosted){
+      const idle=[...sessions.values()].filter(x=>!x.active&&!x.upload&&!x.clearing&&!x.batch).sort((a,b)=>a.lastSeen-b.lastSeen)[0];
+      if(idle)endSession(idle).catch(()=>{});
+    }
     if(sessions.size>=maxSessions)throw new Error('All team sessions are occupied. End an unused session or try later.');
     const s={id:secret(),token:secret(),keys:{fal:'',kie:''},keySetAt:0,lastSeen:Date.now(),uploads:new Map(),media:new Map(),jobs:new Map(),active:null,upload:null,uploadBytes:0,renderCount:0};
+    // Locally, a new browser starts with the keys your pipelines already use. Hosted sessions start empty.
+    if(!hosted&&(pipelineKeys.get('fal')||pipelineKeys.get('kie'))){s.keys={fal:pipelineKeys.get('fal'),kie:pipelineKeys.get('kie')};s.keySetAt=Date.now();}
     s.dir=path.join(instance,s.id);sessions.set(s.id,s);return s;
   }
   async function endSession(s){
@@ -66,6 +103,8 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
     s.ending=(async()=>{await Promise.allSettled([s.active?.promise,s.upload?.promise,s.clearing]);await removeOwned(s.dir,instance);})();return s.ending;
   }
   function credentials(s){if(Date.now()-s.keySetAt>keyTtlMs)s.keys={fal:'',kie:''};return {fal:!!s.keys.fal,kie:!!s.keys.kie};}
+  // Locally, keys entered anywhere also reach the pipelines; Studio keys stay per browser session.
+  function setSessionKeys(s,value){for(const p of ['fal','kie'])if(typeof value?.[p]==='string'&&value[p].trim()){if(value[p].length>4096)throw new Error('API key is too long');s.keys[p]=value[p].trim();s.keySetAt=Date.now();}}
   function mediaURL(s,file){const id=randomUUID();s.media.set(id,file);return `/media/${id}`;}
   function register(s,r){return {id:randomUUID(),url:mediaURL(s,r.output),preview:r.preview?mediaURL(s,r.preview):null,noBridgeUrl:r.noBridge?mediaURL(s,r.noBridge):null,noBridgePreview:r.noBridgePreview?mediaURL(s,r.noBridgePreview):null,frames:r.frames.map(f=>mediaURL(s,f)),duration:r.duration,fps:r.fps,fpsRational:r.fpsRational,bridgeDuration:r.bridgeDuration,bridgeFrames:r.bridgeFrames,noBridgeDuration:r.noBridgeDuration,width:r.width,height:r.height,review:r.review};}
   function checkReview(s,o){const policy=reviewOptions(o.review);if(policy.mode!=='off'&&!s.keys.fal)throw Object.assign(new Error('Quality review requires your fal key. Enter it before starting.'),{status:428});if(policy.mode!=='off'&&o.method==='dissolve')throw new Error('Quality review currently supports inserted bridges; disable it for overlapping dissolves.');return policy;}
@@ -129,7 +168,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
       if(req.headers.host!==new URL(origin).host)return json(res,403,{error:'Unrecognized host'});
       if(req.headers.origin&&req.headers.origin!==origin)return json(res,403,{error:'Cross-origin requests are not allowed'});
       if(req.headers['sec-fetch-site']==='cross-site'&&req.headers['sec-fetch-mode']!=='navigate')return json(res,403,{error:'Cross-site requests are not allowed'});
-      if(hosted){const expected='Basic '+Buffer.from(`team:${teamPassword}`).toString('base64');if(!equal(req.headers.authorization,expected)){res.setHeader('WWW-Authenticate','Basic realm="Dealer Transition Team", charset="UTF-8"');return json(res,401,{error:'Use username team and your team access password.'});}}
+      if(hosted){const expected='Basic '+Buffer.from(`team:${teamPassword}`).toString('base64');if(!equal(req.headers.authorization,expected)){res.setHeader('WWW-Authenticate','Basic realm="Blackjack Pipeline", charset="UTF-8"');return json(res,401,{error:'Use username team and your team access password.'});}}
       const url=new URL(req.url,origin),route=url.pathname;
       const cookie=req.headers.cookie?.split(';').map(x=>x.trim()).find(x=>x.startsWith('studio_session='))?.slice(15);
       let s=sessions.get(cookie);
@@ -140,7 +179,7 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
       }
       if(route.startsWith('/api/')){
         if(!s||!equal(req.headers['x-studio-token'],s.token))return json(res,403,{error:'Session expired. Refresh this page and enter your keys again.'});
-        if(route==='/api/init'&&req.method==='GET')return json(res,200,{methods:METHODS,prompt:DEFAULT_PROMPT,keys:credentials(s),hosted,maxUploadBytes,activeJob:s.active?.id||null,activeBatch:s.batch?.rowId||null});
+        if(route==='/api/init'&&req.method==='GET')return json(res,200,{methods:METHODS,prompt:DEFAULT_PROMPT,keys:credentials(s),hosted,maxUploadBytes,activeJob:s.active?.id||null,activeBatch:s.batch?.rowId||null,pipelines:!!engine,pipelineKeys:pipelineKeys.status()});
         if(route.startsWith('/api/request-jobs/')&&req.method==='GET'){
           const requestId=route.slice('/api/request-jobs/'.length),job=[...s.jobs.values()].find(j=>j.requestId===requestId);
           if(!job)return json(res,404,{error:'That render request was not found in your server session. It may not have reached the server, or the server may have restarted. Check provider history before submitting again.'});
@@ -156,9 +195,16 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
         }
         if(route==='/api/batch/release'&&req.method==='POST'){const {rowId}=await body(req);await releaseBatch(s,rowId);return json(res,200,{});}
         if(route==='/api/keys'&&req.method==='POST'){
-          const value=await body(req);for(const p of ['fal','kie'])if(typeof value[p]==='string'&&value[p].trim()){if(value[p].length>4096)throw new Error('API key is too long');s.keys[p]=value[p].trim();s.keySetAt=Date.now();}return json(res,200,credentials(s));
+          const value=await body(req);setSessionKeys(s,value);
+          if(!hosted)pipelineKeys.set(value);return json(res,200,{...credentials(s),runninghub:pipelineKeys.status().runninghub});
         }
-        if(route==='/api/keys'&&req.method==='DELETE'){s.keys={fal:'',kie:''};return json(res,200,credentials(s));}
+        if(route==='/api/keys'&&req.method==='DELETE'){s.keys={fal:'',kie:''};if(!hosted)pipelineKeys.clear();return json(res,200,{...credentials(s),runninghub:pipelineKeys.status().runninghub});}
+        if(route==='/api/pipeline/keys'&&['POST','DELETE'].includes(req.method)){
+          if(req.method==='POST'){const value=await body(req);pipelineKeys.set(value);if(!hosted)setSessionKeys(s,value);}
+          else{pipelineKeys.clear();if(!hosted)s.keys={fal:'',kie:''};}
+          return json(res,200,pipelineKeys.status());
+        }
+        if(route.startsWith('/api/pipeline')){if(await routes.api(req,res,route,url))return;return json(res,404,{error:'Not found'});}
         if((route==='/api/upload'||route==='/api/batch/upload')&&req.method==='POST'){
           const batch=route==='/api/batch/upload'?s.batch:null,slot=url.searchParams.get('slot');
           if(route==='/api/batch/upload'&&(!batch||batch.rowId!==url.searchParams.get('rowId')||!['a','b','candidate'].includes(slot)))throw new Error('Invalid batch workspace or slot.');
@@ -221,27 +267,45 @@ async function createStudio({dataDir=process.env.DATA_DIR||path.join(__dirname,'
       if(route.startsWith('/media/')&&['GET','HEAD'].includes(req.method)){
         const file=s?.media.get(route.slice('/media/'.length));if(!file)return json(res,404,{error:'Media not found in your session'});return await sendFile(req,res,file,url.searchParams.get('download')==='1');
       }
-      const staticFiles={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/notices.js':'notices.js','/renderer.js':'renderer.js','/browser.js':'browser.js','/frame-rate.js':'frame-rate.js','/batch.js':'batch.js','/batch-replace.js':'batch-replace.js','/batch-estimates.js':'batch-estimates.js','/batch-settings.js':'batch-settings.js','/batch-format.js':'batch-format.js','/batch-zip.js':'batch-zip.js','/batch-review.js':'batch-review.js'};
+      if(route.startsWith('/pipeline-files/')||route.startsWith('/pipeline-download/')){
+        if(!s)return json(res,403,{error:'Session expired. Refresh this page.'});
+        if(await routes.files(req,res,route,url))return;return json(res,404,{error:'Not found'});
+      }
+      const staticFiles={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/notices.js':'notices.js','/renderer.js':'renderer.js','/browser.js':'browser.js','/frame-rate.js':'frame-rate.js','/batch.js':'batch.js','/batch-replace.js':'batch-replace.js','/batch-estimates.js':'batch-estimates.js','/batch-settings.js':'batch-settings.js','/batch-format.js':'batch-format.js','/batch-zip.js':'batch-zip.js','/batch-review.js':'batch-review.js',
+        '/shell.js':'shell.js','/pipeline.js':'pipeline.js','/pipeline.css':'pipeline.css','/favicon.svg':'favicon.svg'};
       if(staticFiles[route]&&req.method==='GET'){
-        const name=staticFiles[route],types={html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8'};
+        const name=staticFiles[route],types={html:'text/html; charset=utf-8',css:'text/css; charset=utf-8',js:'text/javascript; charset=utf-8',svg:'image/svg+xml'};
         res.writeHead(200,{'Content-Type':types[name.split('.').at(-1)],'Cache-Control':'no-store'});res.end(await fs.readFile(path.join(__dirname,'public',name)));return;
       }json(res,404,{error:'Not found'});
     }catch(e){if(!res.headersSent&&!res.destroyed)json(res,e.status||400,{error:e.message});else res.destroy();}
   });
   server.requestTimeout=10*60*1000;
-  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,hosted?'0.0.0.0':'127.0.0.1',resolve);});
+  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,hosted?'0.0.0.0':'127.0.0.1',resolve);}).catch(async e=>{clearInterval(cleanup);await engine?.close();throw e;});
   const localURL=`http://127.0.0.1:${server.address().port}`;if(!origin)origin=localURL;
   let closePromise;
-  function close(){return closePromise||=(async()=>{closing=true;clearInterval(cleanup);await Promise.allSettled([...sessions.values()].map(endSession));server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await removeOwned(instance,namespace);})();}
-  return {url:origin,localURL,hosted,close,server,sweep};
+  function close(){return closePromise||=(async()=>{closing=true;clearInterval(cleanup);await engine?.close();previews.closeAll();await Promise.allSettled([...sessions.values()].map(endSession));server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await removeOwned(instance,namespace);})();}
+  return {url:origin,localURL,hosted,close,server,sweep,engine,keys:pipelineKeys};
 }
 module.exports={createStudio};
-if(require.main===module)createStudio().then(studio=>{
-  console.log(`Dealer Transition Studio Web: ${studio.url}`);console.log('Each browser session uses its own keys and temporary files. Keys are never saved.');
-  console.log(`Listening on ${studio.server.address().address}:${studio.server.address().port} (${studio.hosted?'hosted':'local'} mode)`);
-  if(process.argv.includes('--open')&&!studio.hosted){
-    if(process.platform==='win32')spawn('rundll32.exe',['url.dll,FileProtocolHandler',studio.url],{windowsHide:true,stdio:'ignore'}).on('error',()=>{});
-    else spawn(process.platform==='darwin'?'open':'xdg-open',[studio.url],{stdio:'ignore'}).on('error',()=>{});
-  }
-  for(const sig of ['SIGINT','SIGTERM'])process.on(sig,()=>studio.close().then(()=>process.exit(0)));
-}).catch(e=>{console.error(e.message);process.exitCode=1;});
+function openBrowser(url){
+  if(process.platform==='win32')spawn('rundll32.exe',['url.dll,FileProtocolHandler',url],{windowsHide:true,stdio:'ignore'}).on('error',()=>{});
+  else spawn(process.platform==='darwin'?'open':'xdg-open',[url],{stdio:'ignore'}).on('error',()=>{});
+}
+if(require.main===module){
+  const localHost=!(process.env.STUDIO_HOSTED==='true'||process.env.RENDER==='true'),port=Number(process.env.PORT)||(localHost?5199:0);
+  createStudio({envKeys:true,port}).then(studio=>{
+    console.log(`Blackjack Pipeline: ${studio.url}`);
+    console.log(studio.engine?`Pipelines are on. Runs and their files are kept in ${path.join(path.resolve(process.env.DATA_DIR||path.join(__dirname,'data')),'pipeline')} and keep running with the browser closed.`:'Pipelines are off on this host (Transition Studio only).');
+    console.log('Provider keys are held in memory only and are never written to disk.');
+    console.log(`Listening on ${studio.server.address().address}:${studio.server.address().port} (${studio.hosted?'hosted':'local'} mode)`);
+    if(process.argv.includes('--open')&&!studio.hosted)openBrowser(studio.url);
+    for(const sig of ['SIGINT','SIGTERM','SIGHUP'])process.on(sig,()=>studio.close().then(()=>process.exit(0)));
+  }).catch(async e=>{
+    // Starting it twice just opens the copy that's already running.
+    if(localHost&&['EADDRINUSE','ELOCKED'].includes(e.code)){
+      const url=`http://127.0.0.1:${port}`,ok=await fetch(`${url}/health`).then(r=>r.ok,()=>false);
+      if(ok){console.log(`Blackjack Pipeline is already running: ${url}`);if(process.argv.includes('--open'))openBrowser(url);return;}
+    }
+    console.error(e.message);process.exitCode=1;
+  });
+}

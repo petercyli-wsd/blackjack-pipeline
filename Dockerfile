@@ -7,6 +7,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY server.js ./
 COPY src ./src
 COPY public ./public
+COPY pipelines ./pipelines
 ENV NODE_ENV=production PORT=10000 DATA_DIR=/tmp/dealer-transition-studio FFMPEG_PATH=/usr/bin/ffmpeg FFPROBE_PATH=/usr/bin/ffprobe FFMPEG_THREADS=1
 USER node
 EXPOSE 10000

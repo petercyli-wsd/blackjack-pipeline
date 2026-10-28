@@ -1,0 +1,28 @@
+# REFERENCE ONLY. This is not the free Studio deployment (that's render.yaml, which must stay free).
+# Pipelines need an always-on PAID instance and a persistent disk; deploying this costs money and needs
+# the owner's explicit go-ahead. To use it: Render > New > Blueprint, and set the Blueprint path to this
+# file (or create the Web Service by hand with the same settings).
+services:
+  - type: web
+    name: blackjack-pipeline
+    runtime: docker
+    dockerfilePath: ./Dockerfile.pipeline
+    plan: standard            # 2 GB RAM: SAM 2 and OpenCV on the CPU need it. Paid.
+    numInstances: 1           # one server per disk: runs are owned by the process that holds the lock
+    healthCheckPath: /health
+    autoDeployTrigger: "off"  # a deploy restarts the server; runs pause and resume, but don't surprise them
+    disk:
+      name: pipeline-data
+      mountPath: /data
+      sizeGB: 25              # ~1 GB per run plus ~3 GB of shared toolchains
+    envVars:
+      - key: STUDIO_HOSTED
+        value: "true"
+      - key: TEAM_PASSWORD
+        generateValue: true
+      - key: PIPELINES_ENABLED
+        value: "true"
+      - key: GITHUB_TOKEN     # read access to the private game repo (fine-grained token, Contents: read)
+        sync: false
+      - key: FAL_KEY          # optional: lets unattended runs survive restarts without re-entering the key
+        sync: false

@@ -4,35 +4,49 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; media-src 'self' blob:; connect-src 'self'">
-  <title>Dealer Transition Studio Web</title>
+  <title>Blackjack Pipeline</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="pipeline.css">
 </head>
 <body>
 <aside id="notifications" aria-label="Notifications"></aside>
-<header>
-  <div class="brand" aria-hidden="true">&#9672;</div>
-  <div class="brand-copy"><h1>Dealer Transition Studio</h1><p>Two clips. One continuous performance.</p></div>
-  <div class="header-actions"><span class="badge" id="app-mode">TEAM WEB APP</span><button id="end-session" class="quiet">End my session</button><button id="shutdown" class="quiet" hidden>Stop local app</button></div>
+<header class="app-header">
+  <div class="brand" aria-hidden="true"><svg viewBox="0 0 32 32" width="30" height="30"><rect x="5" y="3" width="15" height="21" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><rect x="12" y="8" width="15" height="21" rx="2.5" fill="currentColor" opacity=".9"/><path d="M19.5 14.5l2.5 4-2.5 4-2.5-4z" fill="#10151e"/></svg></div>
+  <div class="brand-copy"><h1>Blackjack Pipeline</h1><p>Dealer footage in, playable table out.</p></div>
+  <nav class="app-tabs" role="tablist" aria-label="Sections">
+    <button role="tab" id="tab-btn-pipelines" aria-controls="tab-pipelines" aria-selected="true">Pipelines</button>
+    <button role="tab" id="tab-btn-studio" aria-controls="tab-studio" aria-selected="false" tabindex="-1">Transition Studio</button>
+  </nav>
+  <div class="header-actions"><button id="keys-chip" class="key-chip quiet" aria-controls="credentials" title="Provider keys">Keys</button><span class="badge" id="app-mode">TEAM WEB APP</span><button id="end-session" class="quiet">End my session</button><button id="shutdown" class="quiet" hidden>Stop local app</button></div>
 </header>
 <main>
-  <section class="card credentials" aria-labelledby="credentials-title">
+  <details class="card credentials" id="credentials">
+    <summary><span class="credentials-heading"><h2 id="credentials-title">Provider keys</h2><span id="key-status" class="key-status" role="status">Checking session...</span></span><span class="credentials-toggle" aria-hidden="true"></span></summary>
+    <div class="credentials-body">
     <div class="credentials-copy">
-      <h2 id="credentials-title">Provider credentials</h2>
-      <p class="help">Add a key for the provider you use. Cloud methods use your credits; local methods need no key.</p>
-      <p id="key-status" class="key-status" role="status">Checking session...</p>
+      <p class="help">Cloud methods and pipelines use your own provider credits. Local methods need no key.</p>
       <details class="session-details"><summary>Privacy, session limits &amp; uploads</summary>
-        <p class="help">Keys stay in server memory for your browser session, never saved or shared with other users. Keys expire after 8 hours; idle sessions and files expire after 2 hours. Use Clear keys or End my session to remove them.</p>
+        <p class="help">Keys stay in this server's memory, never on disk and never shared with other users. They expire after 8 hours; use Clear keys or End my session to remove them sooner. When the app runs on your computer, keys you enter here are also used by your pipeline runs in the background.</p>
         <p class="help" id="hosting-note">Videos go to this app's processing server. Generation sends boundary images to fal/KIE; optional AI review also sends reference images and sampled frames across the bridge and both joins through fal/OpenRouter. Download results before ending your session. Single-pair limits: 512 MB per video, 1 GB uploads and 5 renders per session; clips up to 10 minutes. CSV batches recycle a separate workspace (two sources and, for existing-output review, one result) after each saved row. Batch checkpoints and buffered ZIPs stay in this browser until you clear them.</p>
       </details>
     </div>
     <div class="credential-inputs">
-      <label>fal API key<input id="fal-key" type="password" autocomplete="off" placeholder="For FILM, RIFE, Kling or Seedance" spellcheck="false"></label>
+      <label>fal API key<input id="fal-key" type="password" autocomplete="off" placeholder="For FILM, RIFE, Kling, Seedance and AI review" spellcheck="false"></label>
       <label>KIE API key<input id="kie-key" type="password" autocomplete="off" placeholder="For Kling through KIE" spellcheck="false"></label>
+      <label id="runninghub-wrap" hidden>RunningHub API key<input id="runninghub-key" type="password" autocomplete="off" placeholder="Only for the optional dealer-mattes stage" spellcheck="false"></label>
       <div class="actions credential-actions"><button id="save-keys" class="accent">Use keys for this session</button><button id="forget-keys" class="quiet">Clear keys</button></div>
       <p id="key-feedback" class="help credential-feedback" role="status"></p>
     </div>
+    </div>
+  </details>
+
+  <section id="tab-pipelines" role="tabpanel" aria-labelledby="tab-btn-pipelines">
+    <div id="pl-root" class="pl-root" aria-live="off"><p class="pl-loading">Loading pipelines…</p></div>
   </section>
 
+  <section id="tab-studio" role="tabpanel" aria-labelledby="tab-btn-studio" hidden>
+  <div class="studio-intro"><div><h2>Transition Studio</h2><p>Make, compare or repair transitions by hand: one clip pair at a time, or a CSV batch. Pipelines use this same engine automatically, so you only need this tab for one-off work.</p></div></div>
   <nav class="actions mode-tabs" aria-label="Workflow"><button id="mode-single" aria-pressed="true">Single clip pair</button><button id="mode-batch" aria-pressed="false">CSV batch</button></nav>
   <div id="single-inputs">
   <div class="step-heading"><h2><span class="step-number">1</span> Choose your clips</h2><p>Set the end of A and the start of B.</p></div>
@@ -152,7 +166,9 @@
     </aside>
   </dialog>
   <footer>Try FILM or RIFE for a small pose gap; Kling or Seedance for new motion. Inspect fingers, cards and chips at both joins.</footer>
+  </section>
 </main>
-<script src="notices.js"></script><script src="browser.js"></script><script src="frame-rate.js"></script><script src="renderer.js"></script><script src="batch-format.js"></script><script src="batch-settings.js"></script><script src="batch-zip.js"></script><script src="batch-estimates.js"></script><script src="batch-replace.js"></script><script src="batch.js"></script><script src="batch-review.js"></script>
+<dialog id="pl-dialog" class="pl-dialog" aria-labelledby="pl-dialog-title"></dialog>
+<script src="notices.js"></script><script src="browser.js"></script><script src="frame-rate.js"></script><script src="renderer.js"></script><script src="batch-format.js"></script><script src="batch-settings.js"></script><script src="batch-zip.js"></script><script src="batch-estimates.js"></script><script src="batch-replace.js"></script><script src="batch.js"></script><script src="batch-review.js"></script><script src="shell.js"></script><script src="pipeline.js"></script>
 </body>
 </html>

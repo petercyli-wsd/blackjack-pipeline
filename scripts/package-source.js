@@ -2,10 +2,10 @@ const fs=require('node:fs/promises');
 const path=require('node:path');
 const {execFileSync}=require('node:child_process');
 (async()=>{
-  const root=path.resolve(__dirname,'..'),out=path.join(root,'dist',`DealerTransitionTeam-source-${Date.now()}`);
+  const root=path.resolve(__dirname,'..'),out=path.join(root,'dist',`BlackjackPipeline-source-${Date.now()}`);
   await fs.mkdir(out,{recursive:true});
-  for(const name of ['public','src','scripts','test'])await fs.cp(path.join(root,name),path.join(out,name),{recursive:true});
-  for(const name of ['server.js','package.json','package-lock.json','README.md','DESKTOP-REFERENCE.md','.gitignore','.dockerignore','Dockerfile','render.yaml','Start Web App.cmd','Start Web App.vbs'])await fs.copyFile(path.join(root,name),path.join(out,name));
+  for(const name of ['public','src','pipelines','scripts','test','docs'])await fs.cp(path.join(root,name),path.join(out,name),{recursive:true});
+  for(const name of ['server.js','package.json','package-lock.json','README.md','DESKTOP-REFERENCE.md','.gitignore','.dockerignore','Dockerfile','render.yaml','Start Blackjack Pipeline.cmd','Start Blackjack Pipeline.vbs','Dockerfile.pipeline'])await fs.copyFile(path.join(root,name),path.join(out,name));
   if(process.platform==='win32'){
     const quote=s=>"'"+s.replaceAll("'","''")+"'";
     // Explicit forward-slash entry names also extract correctly on Unix.

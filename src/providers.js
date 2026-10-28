@@ -71,4 +71,31 @@ async function generate(m,frames,o,key,signal,log,record,{falClientFactory=creat
   }
   throw new Error(`Timed out. KIE job ${id} may still be running; check your dashboard before retrying.`);
 }
-module.exports={generate,json,providerError};
+// Reconnects to a request submitted before a restart instead of paying for a new one.
+// Throws {gone:true} when the provider no longer knows the request, so the caller can resubmit.
+async function resume(m,job,key,signal,log,{falClientFactory=createFalClient}={}) {
+  const gone=()=>Object.assign(new Error(`${job.provider} request ${job.requestId} is no longer available`),{gone:true});
+  const deadline=Date.now()+45*60*1000;
+  if(job.provider==='fal') {
+    const fal=falClientFactory({credentials:key}),endpoint=job.endpoint||m.endpoint;
+    while(Date.now()<deadline) {
+      signal.throwIfAborted();
+      let state;
+      try{state=await fal.queue.status(endpoint,{requestId:job.requestId,logs:false});}catch(error){if([404,410,422].includes(error.status))throw gone();throw providerError('fal job status',error,key);}
+      log(`fal: ${state.status} (reconnected to ${job.requestId})`);
+      if(state.status==='COMPLETED') { const result=await falStep('fal result retrieval',key,()=>fal.queue.result(endpoint,{requestId:job.requestId})); if(!result.data.video?.url) throw new Error('Provider returned no video'); return result.data.video.url; }
+      await delay(4000,undefined,{signal});
+    }
+  } else {
+    while(Date.now()<deadline) {
+      const {data}=await json(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${encodeURIComponent(job.requestId)}`,key,null,signal).catch(e=>{if(/HTTP 404/.test(e.message))throw gone();throw e;});
+      if(!data?.state) throw gone();
+      log(`KIE: ${data.state} (reconnected to ${job.requestId})`);
+      if(data.state==='fail') throw new Error(data.failMsg||'KIE generation failed');
+      if(data.state==='success') { const result=JSON.parse(data.resultJson); if(!result.resultUrls?.[0]) throw new Error('KIE returned no video'); return result.resultUrls[0]; }
+      await delay(5000,undefined,{signal});
+    }
+  }
+  throw new Error(`Timed out reconnecting. Request ${job.requestId} may still be running; check the provider before retrying.`);
+}
+module.exports={generate,resume,json,providerError};
